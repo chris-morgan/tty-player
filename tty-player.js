@@ -697,6 +697,11 @@ ISP.render = function() {
 			this.fireSimpleEvent("timeupdate");
 			this.ttyPlayer["pause"]();
 			this.fireSimpleEvent("ended");
+
+			if (this.ttyPlayer["poster"] != "") {
+				this.ttyPlayer["currentTime"] = 0;
+				this.showPoster = true;
+			}
 		}
 	} else {
 		// Do we need to fire a timeupdate event? We should do them every 66–350ms; Firefox does 250 for video, but because the average length is going to be shorter and because I can, I’m going for 100ms.
