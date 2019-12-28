@@ -10,17 +10,7 @@
 ;(function() {
 "use strict";
 
-var textDecoder = "TextDecoder" in window ? new TextDecoder() : null;
-/// @param {Array<number>|Uint8Array} array
-function decodeUTF8(array) {
-	if (array instanceof Array || !textDecoder) {
-		return decodeURIComponent(Array.prototype.map.call(array, function(ord) {
-			return "%" + ("0" + ord.toString(16)).substr(-2);
-		}).join(""));
-	} else {
-		return textDecoder.decode(array);
-	}
-}
+var textDecoder = new TextDecoder();
 
 /// parseDataURI("data:foo/bar;base64,MTIzNA==#foo") === "1234"
 /// @param {string} uri
@@ -35,7 +25,7 @@ function parseDataURI(uri) {
 	return [mime, mime === chunks[1] ? data : atob(data)];
 }
 
-/// @param {Array<number>|Uint8Array} array
+/// @param {Uint8Array} array
 function byteArrayToString(array) {
 	// String.fromCharCode.apply can for too large values overflow the call stack.
 	// Hence this, though I doubt we actually use large enough strings to worry.
@@ -43,7 +33,7 @@ function byteArrayToString(array) {
 	var CHUNK_SIZE = 0x8000;
 	var c = [];
 	for (var i = 0; i < array.length; i += CHUNK_SIZE) {
-		c.push(String.fromCharCode.apply(null, array["subarray" in array ? "subarray" : "slice"](i, i + CHUNK_SIZE)));
+		c.push(String.fromCharCode.apply(null, array.subarray(i, i + CHUNK_SIZE)));
 	}
 	return c.join("");
 }
@@ -75,41 +65,24 @@ function classifyPosterURL(url) {
 	return {type: null};
 }
 
-/// @param {ArrayBuffer|Array<number>} source
+/// @param {ArrayBuffer} source
 function parseTTYRec(source) {
-	var isArray = source instanceof Array;
 	var utf8 = true;
 	var dimensions = null;
 	var data = [];
 	var byteOffset = 0;
 	var timeOffset = 0;
-	var sourceLength = isArray ? source.length : source.byteLength;
+	var sourceLength = source.byteLength;
 	while (byteOffset < sourceLength) {
 		var sec, usec, len;
-		if (!isArray) {
-			var header = new DataView(source, byteOffset);
-			sec = header.getUint32(0, true);
-			usec = header.getUint32(4, true);
-			len = header.getUint32(8, true);
-		} else {
-			sec = source[byteOffset] +
-				  (source[byteOffset + 1] << 8) +
-				  (source[byteOffset + 2] << 16) +
-				  (source[byteOffset + 3] << 24);
-			usec = source[byteOffset + 4] +
-				  (source[byteOffset + 5] << 8) +
-				  (source[byteOffset + 6] << 16) +
-				  (source[byteOffset + 7] << 24);
-			len = source[byteOffset + 8] +
-				  (source[byteOffset + 9] << 8) +
-				  (source[byteOffset + 10] << 16) +
-				  (source[byteOffset + 11] << 24);
-		}
+		var header = new DataView(source, byteOffset);
+		sec = header.getUint32(0, true);
+		usec = header.getUint32(4, true);
+		len = header.getUint32(8, true);
 		var time = sec + (usec / 1000000);
 		byteOffset += 12;
-		var payload = isArray ? source.slice(byteOffset, byteOffset + len)
-							  : new Uint8Array(source, byteOffset, len);
-		payload = utf8 ? decodeUTF8(payload) : byteArrayToString(payload);
+		var payload = new Uint8Array(source, byteOffset, len);
+		payload = utf8 ? textDecoder.decode(payload) : byteArrayToString(payload);
 		if (byteOffset === 12) {
 			// First chunk might be metadata; this is how termrec does it, for example.
 			timeOffset = time;
@@ -260,11 +233,7 @@ function makeMenu(ttyPlayer) {
 		return null;
 	}
 
-	try {
-		menu.type = "context";
-	} catch (e) {
-		// IE 11, "Invalid argument."
-	}
+	menu.type = "context";
 	if (menu.type !== "context") {
 		return null;
 	}
@@ -1095,23 +1064,56 @@ ISP.resourceFetchAlgorithm = function() {
 		finishResourceFetchAlgorithm();
 	}
 
-	function handleResponse(xhr, useResponseText) {
+	// > 1. Let the current media resource be the resource given by the
+	// >    absolute URL passed to this algorithm. This is now the
+	// >    element's media resource.
+	// current media resource = self.currentSrc
+
+	// > 2. Remove all media-resource-specific text tracks from the
+	// >    media element's list of pending text tracks, if any.
+	// [Nothing to do.]
+
+	// > 3. Optionally, run the following substeps. This is the expected
+	// >    behavior if the user agent intends to not attempt to fetch
+	// >    the resource until the user requests it explicitly (e.g. as
+	// >    a way to implement the preload attribute's none keyword).
+	// [Substeps omitted as I don’t wish to implement no-preload.]
+
+	// > 4. Perform a potentially CORS-enabled fetch of the current
+	// >    media resource's absolute URL, with the mode being the
+	// >    state of the media element's crossorigin content attribute,
+	// >    the origin being the origin of the media element's
+	// >    Document, and the default origin behaviour set to taint.
+	// >
+	//
+	// [Vast swathes of text follow, mostly irrelevant as we load the
+	// entire resource at once; we don’t need to bother about the
+	// "stalled" and "suspend" events, and won’t bother for now about
+	// "progress" every 350±200ms/every byte (whichever is least
+	// frequent)]
+	//
+	// INCORRECTNESS: the window’s origin is used instead of the media
+	// element’s document’s. Security prevents doing this right.
+	// Dunno about the taint bit.
+
+	// Past here we go laissez-faire, mostly ignoring the specs.
+
+	var xhr = new XMLHttpRequest();
+	if (self.ttyPlayer["crossOrigin"] === "use-credentials") {
+		xhr.withCredentials = true;
+	} else if (self.ttyPlayer["crossOrigin"] === "anonymous" && "mozAnon" in xhr) {
+		// INCORRECTNESS: no anonymous support outside Firefox.
+		// (No one has implemented AnonXMLHttpRequest ☹.)
+		xhr.mozAnon = true;
+	}
+	xhr.onabort = finishResourceFetchAlgorithm;
+	xhr.open("GET", self.currentSrc);
+	xhr.responseType = "arraybuffer";
+	xhr.onload = xhr.onerror = function() {
 		if (xhr.status === 200) {
 			var data;
 			try {
-				/** @type {Array<number>|ArrayBuffer} */
-				var response;
-				if (useResponseText) {
-					var string = xhr.responseText;
-					response = [];
-					for (var i = 0; i < string.length; i++) {
-						response.push(string.charCodeAt(i) & 0xff);
-					}
-				} else {
-					response = xhr.response;
-				}
-
-				data = parseTTYRec(response);
+				data = parseTTYRec(xhr.response);
 				// TODO: add a bit of validation/sanity checking?
 			} catch (e) {
 				// window.console && console.warn && console.warn("parseTTYRec failed: ", e);
@@ -1153,83 +1155,13 @@ ISP.resourceFetchAlgorithm = function() {
 			self.resourceSelectionAlgorithmFailedWithAttribute();
 			return;
 		}
-	}
-
-	// > 1. Let the current media resource be the resource given by the
-	// >    absolute URL passed to this algorithm. This is now the
-	// >    element's media resource.
-	// current media resource = self.currentSrc
-
-	// > 2. Remove all media-resource-specific text tracks from the
-	// >    media element's list of pending text tracks, if any.
-	// [Nothing to do.]
-
-	// > 3. Optionally, run the following substeps. This is the expected
-	// >    behavior if the user agent intends to not attempt to fetch
-	// >    the resource until the user requests it explicitly (e.g. as
-	// >    a way to implement the preload attribute's none keyword).
-	// [Substeps omitted as I don’t wish to implement no-preload.]
-
-	// > 4. Perform a potentially CORS-enabled fetch of the current
-	// >    media resource's absolute URL, with the mode being the
-	// >    state of the media element's crossorigin content attribute,
-	// >    the origin being the origin of the media element's
-	// >    Document, and the default origin behaviour set to taint.
-	// >
-	//
-	// [Vast swathes of text follow, mostly irrelevant as we load the
-	// entire resource at once; we don’t need to bother about the
-	// "stalled" and "suspend" events, and won’t bother for now about
-	// "progress" every 350±200ms/every byte (whichever is least
-	// frequent)]
-	//
-	// INCORRECTNESS: the window’s origin is used instead of the media
-	// element’s document’s. Security prevents doing this right.
-	// Dunno about the taint bit.
-
-	// Past here we go laissez-faire, mostly ignoring the specs.
-
-	var useResponseText;
-
-	// Some browsers (Firefox, Chrome) allow you to use data URIs with
-	// an XMLHttpRequest, others (IE) don’t.
-	// To be sure, let’s parse it ourself. (TODO: assess perf.)
-	var data = parseDataURI(self.currentSrc);
-	if (data !== null) {
-		handleResponse({status: 200, responseText: data[1]}, true);
-	} else {
-		var xhr = new XMLHttpRequest();
-		if (self.ttyPlayer["crossOrigin"] === "use-credentials") {
-			xhr.withCredentials = true;
-		} else if (self.ttyPlayer["crossOrigin"] === "anonymous" && "mozAnon" in xhr) {
-			// INCORRECTNESS: no anonymous support outside Firefox.
-			// (No one has implemented AnonXMLHttpRequest ☹.)
-			xhr.mozAnon = true;
-		}
-		xhr.onabort = finishResourceFetchAlgorithm;
-		xhr.open("GET", self.currentSrc);
-		useResponseText = !("responseType" in xhr);
-		xhr.responseType = "arraybuffer";
-		if (xhr.responseType !== "arraybuffer") {
-			useResponseText = true;
-		}
-		if (useResponseText) {
-			xhr.overrideMimeType("text/plain; charset=x-user-defined");
-			xhr.onreadystatechange = function() {
-				if (xhr.readyState === 4) {
-					handleResponse(xhr, true);
-				}
-			};
-		} else {
-			xhr.onload = xhr.onerror = function() { handleResponse(xhr, false); };
-		}
-		self.resourceFetchXHR = xhr;
-		try {
-			xhr.send();
-		} catch (e) {
-			// e.g. relative URL on file: in some browsers.
-			handleResponse(xhr, undefined);
-		}
+	};
+	self.resourceFetchXHR = xhr;
+	try {
+		xhr.send();
+	} catch (e) {
+		// e.g. relative URL on file: in some browsers.
+		xhr.onerror();
 	}
 };
 
