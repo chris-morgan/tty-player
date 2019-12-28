@@ -4,6 +4,7 @@
 // ==ClosureCompiler==
 // @output_file_name tty-player.min.js
 // @compilation_level ADVANCED_OPTIMIZATIONS
+// @language_out ES6
 // ==/ClosureCompiler==
 /* global MediaError, TimeRanges, Terminal, HTMLElement */
 ;(function() {
@@ -1232,57 +1233,69 @@ ISP.resourceFetchAlgorithm = function() {
 	}
 };
 
-var TTYPlayerPrototype = Object.create(HTMLElement.prototype);
+class TTYPlayerElement extends HTMLElement {
 
-TTYPlayerPrototype["createdCallback"] = function() {
-	this["_"] = new TTYPlayerInternalState(this);
-	this["_"].setUp();
+	// FIXME: we used to set up the internal state at construction time, but with custom elements v1 we can no longer do this: it is an error to access or add attributes in the constructor, and browsers do actually barf if you try it. Until we go all in on Shadow DOM, then, we initialise everything in connectedCallback. This means that various state is uninitialised until that time, and the element won’t work properly in various severe ways.
 
-	// TODO: put no-preload in load(), as defined, rather than here.
-	// As it stands, changing src will preload even though it need not.
-	if (this["preload"] !== "none") {
-		this["load"]();
+	static get "observedAttributes"() {
+		return ["src", "controls", "poster"];
 	}
 
-	if (this["autoplay"]) {
-		this["play"]();
+	"attributeChangedCallback"(name, oldValue, value) {
+		if (!this["_"]) {
+			return;
+		}
+		if (name === "src" && value !== null) {
+			this["pause"]();
+			// > If a src attribute of a media element is set or changed, the user
+			// > agent must invoke the media element's media element load
+			// > algorithm. (Removing the src attribute does not do this, even if
+			// > there are source elements present.)
+			this["load"]();
+		} else if (name === "controls" && value !== null) {
+			// While the controls are display: none, the position of
+			// this element is garbage, so we need to fix it now.
+			this["_"].controlsShownOrHidden();
+		} else if (name === "poster") {
+			// Update the poster if necessary.
+			//
+			// > If the specified resource is to be used, then, when the element is
+			// > created or when the poster attribute is set, changed, or removed,
+			// > the user agent must run the following steps to determine the
+			// > element's poster frame (regardless of the value of the element's
+			// > show poster flag):
+			//
+			// Due to the poster=npt:… possibility and how we could otherwise palm
+			// it off to the browser, we *do* actually regard the show poster flag
+			// in deciding whether to “run these steps”.
+			this["_"].showPoster = this["_"].showPoster;
+		}
 	}
-};
 
-TTYPlayerPrototype["attributeChangedCallback"] = function(name) {
-	if (name === "src" && this.hasAttribute("src")) {
-		this["pause"]();
-		// > If a src attribute of a media element is set or changed, the user
-		// > agent must invoke the media element's media element load
-		// > algorithm. (Removing the src attribute does not do this, even if
-		// > there are source elements present.)
-		this["load"]();
-	} else if (name === "controls" && this.hasAttribute("controls")) {
-		// While the controls are display: none, the position of
-		// this element is garbage, so we need to fix it now.
+	"connectedCallback"() {
+		if (!this["_"]) {
+			this["_"] = new TTYPlayerInternalState(this);
+			this["_"].setUp();
+
+			// TODO: put no-preload in load(), as defined, rather than here.
+			// As it stands, changing src will preload even though it need not.
+			if (this["preload"] !== "none") {
+				this["load"]();
+			}
+
+			if (this["autoplay"]) {
+				this["play"]();
+			}
+		}
+
 		this["_"].controlsShownOrHidden();
-	} else if (name === "poster") {
-		// Update the poster if necessary.
-		//
-		// > If the specified resource is to be used, then, when the element is
-		// > created or when the poster attribute is set, changed, or removed,
-		// > the user agent must run the following steps to determine the
-		// > element's poster frame (regardless of the value of the element's
-		// > show poster flag):
-		//
-		// Due to the poster=npt:… possibility and how we could otherwise palm
-		// it off to the browser, we *do* actually regard the show poster flag
-		// in deciding whether to “run these steps”.
-		this["_"].showPoster = this["_"].showPoster;
 	}
-};
+}
 
-TTYPlayerPrototype["attachedCallback"] = function() {
-	this["_"].controlsShownOrHidden();
-};
+const TTYPlayerElementPrototype = TTYPlayerElement.prototype;
 
-Object.defineProperties(TTYPlayerPrototype, {
-	/** @lends {TTYPlayerPrototype} */
+Object.defineProperties(TTYPlayerElementPrototype, {
+	/** @lends {TTYPlayerElementPrototype} */
 
 	/// @idl readonly attribute MediaError? error;
 	"error": {
@@ -1597,18 +1610,18 @@ Object.defineProperties(TTYPlayerPrototype, {
 // Here are the simple properties that don’t go in the defineProperties block above.
 
 /// @idl void load();
-TTYPlayerPrototype["load"] = function() {
+TTYPlayerElementPrototype["load"] = function() {
 	this["_"].mediaLoadAlgorithm();
 };
 
 /// @idl CanPlayTypeEnum canPlayType(DOMString type);
 /// @stub we only support one format at present, anyway.
-TTYPlayerPrototype["canPlayType"] = function() {
+TTYPlayerElementPrototype["canPlayType"] = function() {
 	return "maybe";
 };
 
 /// @idl void play();
-TTYPlayerPrototype["play"] = function() {
+TTYPlayerElementPrototype["play"] = function() {
 	var self = this;
 
 	function realPlay() {
@@ -1644,7 +1657,7 @@ TTYPlayerPrototype["play"] = function() {
 };
 
 /// @idl void pause();
-TTYPlayerPrototype["pause"] = function() {
+TTYPlayerElementPrototype["pause"] = function() {
 	if (!this["_"].paused) {
 		this["_"].paused = true;
 		clearInterval(this["_"].ticker);
@@ -1654,28 +1667,28 @@ TTYPlayerPrototype["pause"] = function() {
 
 /// @idl attribute double volume;
 /// @stub volume is irrelevant
-TTYPlayerPrototype["volume"] = 1;
+TTYPlayerElementPrototype["volume"] = 1;
 
 /// @idl attribute boolean muted;
 /// @stub volume is irrelevant
-TTYPlayerPrototype["muted"] = false;
+TTYPlayerElementPrototype["muted"] = false;
 
 /// @idl TextTrack addTextTrack(TextTrackKind kind, optional DOMString label = "", optional DOMString language = "");
 /// @stub text tracks aren’t implemented yet—will they be?
-TTYPlayerPrototype["addTextTrack"] = function() {
+TTYPlayerElementPrototype["addTextTrack"] = function() {
 	return null;
 };
 // This should theoretically go on HTMLElement.prototype. Too bad.
 /// @idl attribute EventHandler ontitlechange;
-TTYPlayerPrototype["ontitlechange"] = null;
+TTYPlayerElementPrototype["ontitlechange"] = null;
 
-TTYPlayerPrototype["resize"] = function(x, y) {
+TTYPlayerElementPrototype["resize"] = function(x, y) {
 	this["_"].terminal.resize(x, y);
 };
 
-TTYPlayerPrototype["pretendToBeAVideo"] = function() {
+TTYPlayerElementPrototype["pretendToBeAVideo"] = function() {
 	Object.defineProperties(this, {
-		/** @lends {TTYPlayerPrototype} */
+		/** @lends {TTYPlayerElementPrototype} */
 
 		// Let’s pretend (badly) that we’re an HTMLVideoElement!
 		"tagName": {value: "VIDEO"},
@@ -1712,5 +1725,5 @@ TTYPlayerPrototype["pretendToBeAVideo"] = function() {
 	});
 };
 
-document.registerElement("tty-player", {prototype: TTYPlayerPrototype});
+customElements.define("tty-player", TTYPlayerElement);
 })();
