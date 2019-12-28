@@ -54,7 +54,7 @@ function classifyPosterURL(url) {
 	switch (/^(?:(.*):)?/.exec(url)[1]) {
 		case "npt":
 			var time = parseNPT(url);
-			return time ? {type: "npt", time: time} : {type: null};
+			return time ? {type: "npt", time} : {type: null};
 		case "data":
 			var data = parseDataURI(url);
 			if (/^text\/plain$/i.test(data[0])) {
@@ -102,8 +102,8 @@ function parseTTYRec(source) {
 	return {
 		// Heuristic: if the time offset is large enough, it’s probably a timestamp.
 		startDate: timeOffset >= 1e8 ? new Date(timeOffset * 1000) : null,
-		dimensions: dimensions,
-		data: data
+		dimensions,
+		data
 	};
 }
 
