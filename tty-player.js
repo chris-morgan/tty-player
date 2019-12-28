@@ -189,23 +189,23 @@ function invalidStateError() {
 /** @const */ var HAVE_ENOUGH_DATA = 4;
 
 // Annoyingly, with things like MediaError, one apparently can’t construct them in any way.
-// I might need to do something like this.
-var My = {};
-// Note that the constants on MediaError are *not* on My.MediaError, though they are on instances.
-My.MediaError = /** @constructor */ function(code) {
+// So we fake it like this.
+
+// Note that the constants on MediaError are *not* on MyMediaError, though they are on instances.
+var MyMediaError = /** @constructor */ function MediaError(code) {
 	Object.defineProperty(this, "code", {value: code});
 };
-My.MediaError.prototype = Object.create(MediaError.prototype);
+MyMediaError.prototype = Object.create(MediaError.prototype);
 
 /** @const */ var EMPTY_TIME_RANGES = document.createElement("video").played;
 
-My.TimeRanges = /** @constructor */ function(ranges) {
+var MyTimeRanges = /** @constructor */ function TimeRanges(ranges) {
 	Object.defineProperty(this, "length", {value: ranges.length});
 	this["_"] = ranges;
 };
-My.TimeRanges.prototype = Object.create(TimeRanges.prototype);
+MyTimeRanges.prototype = Object.create(TimeRanges.prototype);
 
-My.TimeRanges.prototype["start"] = function(i) {
+MyTimeRanges.prototype["start"] = function(i) {
 	if (i < this["length"]) {
 		return this["_"][i][0];
 	} else {
@@ -213,7 +213,7 @@ My.TimeRanges.prototype["start"] = function(i) {
 	}
 };
 
-My.TimeRanges.prototype["end"] = function(i) {
+MyTimeRanges.prototype["end"] = function(i) {
 	if (i < this["length"]) {
 		return this["_"][i][1];
 	} else {
@@ -913,7 +913,7 @@ ISP.resourceSelectionAlgorithmFailedWithAttribute = function() {
 	// >    steps, using the DOM manipulation task source:
 
 	// >     1. Set the error attribute to a new MediaError object whose code attribute is set to MEDIA_ERR_SRC_NOT_SUPPORTED.
-	this.error = new My.MediaError(MEDIA_ERR_SRC_NOT_SUPPORTED);
+	this.error = new MyMediaError(MEDIA_ERR_SRC_NOT_SUPPORTED);
 
 	// >     2. Forget the media element's media-resource-specific tracks.
 	// [Nothing to do.]
@@ -1480,7 +1480,7 @@ Object.defineProperties(TTYPlayerPrototype, {
 	"seekable": {
 		get: function() {
 			if (this["readyState"] === HAVE_ENOUGH_DATA) {
-				return new My.TimeRanges([0, this["duration"]]);
+				return new MyTimeRanges([0, this["duration"]]);
 			} else {
 				return EMPTY_TIME_RANGES;
 			}
