@@ -122,11 +122,11 @@ function formatTime(time) {
 
 function blankableAttributeProperty(name) {
 	return {
-		get: function() {
+		get() {
 			var value = this.getAttribute(name);
 			return value === null ? "" : value.trim();
 		},
-		set: function(value) {
+		set(value) {
 			this.setAttribute(name, value);
 		}
 	};
@@ -134,10 +134,10 @@ function blankableAttributeProperty(name) {
 
 function attributeBooleanProperty(name) {
 	return {
-		get: function() {
+		get() {
 			return this.hasAttribute(name);
 		},
-		set: function(bool) {
+		set(bool) {
 			if (bool) {
 				this.setAttribute(name, "");
 			} else {
@@ -515,10 +515,10 @@ ISP.setUp = function() {
 Object.defineProperties(ISP, {
 	/** @lends {ISP} */
 	showPoster: {
-		get: function() {
+		get() {
 			return this._showPoster;
 		},
-		set: function(newValue) {
+		set(newValue) {
 			// TODO: this is problematic because it doesn’t keep track of what
 			// poster is active, it just uses the current value of poster. We
 			// should probably store the value of poster and use it for
@@ -1231,33 +1231,33 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute MediaError? error;
 	"error": {
-		get: function() {
+		get() {
 			return this["_"].error;
 		}
 	},
 
 	/// @idl attribute DOMString src;
 	"src": {
-		get: function() {
+		get() {
 			// It needs to be an absolute URL, and we’re not doing <source> tags,
 			// so src and currentSrc will actually always be the same.
 			return this["_"].currentSrc;
 		},
-		set: function(value) {
+		set(value) {
 			this.setAttribute("src", value);
 		}
 	},
 
 	/// @idl readonly attribute DOMString currentSrc;
 	"currentSrc": {
-		get: function() {
+		get() {
 			return this["_"].currentSrc;
 		}
 	},
 
 	/// @idl attribute DOMString crossOrigin;
 	"crossOrigin": {
-		get: function() {
+		get() {
 			var value = this.getAttribute("crossorigin");
 			if (value === null || value === "anonymous" || value === "use-credentials") {
 				return value;
@@ -1265,7 +1265,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 				return "anonymous";
 			}
 		},
-		set: function(value) {
+		set(value) {
 			if (value === null) {
 				this.removeAttribute("crossorigin");
 			} else if (value === "use-credentials") {
@@ -1291,14 +1291,14 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute unsigned short networkState;
 	"networkState": {
-		get: function() {
+		get() {
 			return this["_"].networkState;
 		}
 	},
 
 	/// @idl attribute DOMString preload;
 	"preload": {
-		get: function() {
+		get() {
 			var value = this.getAttribute("preload");
 			if (value === "none" || value === "metadata" || value === "auto") {
 				return value;
@@ -1307,7 +1307,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 				return "auto";
 			}
 		},
-		set: function(value) {
+		set(value) {
 			if (value === "none" || value === "metadata" || value === "auto") {
 				this.setAttribute("metadata", value);
 			} else {
@@ -1318,7 +1318,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute TimeRanges buffered;
 	"buffered": {
-		get: function() {
+		get() {
 			return this["seekable"];
 		}
 	},
@@ -1343,7 +1343,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute unsigned short readyState;
 	"readyState": {
-		get: function() {
+		get() {
 			return this["_"].readyState;
 		}
 	},
@@ -1356,10 +1356,10 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl attribute double currentTime;
 	"currentTime": {
-		get: function() {
+		get() {
 			return this["_"].currentTime;
 		},
-		set: function(newTime) {
+		set(newTime) {
 			if (!this["_"].data) {
 				throw invalidStateError();
 			}
@@ -1370,7 +1370,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute unrestricted double duration;
 	"duration": {
-		get: function() {
+		get() {
 			return this["_"].duration;
 		}
 	},
@@ -1380,17 +1380,17 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute boolean paused
 	"paused": {
-		get: function() {
+		get() {
 			return this["_"].paused;
 		}
 	},
 
 	/// @idl attribute double defaultPlaybackRate;
 	"defaultPlaybackRate": {
-		get: function() {
+		get() {
 			return this["_"].defaultPlaybackRate;
 		},
-		set: function(rate) {
+		set(rate) {
 			rate = +rate;
 			var notify = this["_"].defaultPlaybackRate !== rate;
 			this["_"].defaultPlaybackRate = rate;
@@ -1402,10 +1402,10 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl attribute double playbackRate;
 	"playbackRate": {
-		get: function() {
+		get() {
 			return this["_"].playbackRate;
 		},
-		set: function(rate) {
+		set(rate) {
 			rate = +rate;
 			var notify = this["_"].playbackRate !== rate;
 			this["_"].playbackRate = rate;
@@ -1423,7 +1423,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute TimeRanges seekable;
 	"seekable": {
-		get: function() {
+		get() {
 			if (this["readyState"] === HAVE_ENOUGH_DATA) {
 				return new MyTimeRanges([0, this["duration"]]);
 			} else {
@@ -1434,7 +1434,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 
 	/// @idl readonly attribute boolean ended;
 	"ended": {
-		get: function() {
+		get() {
 			// XXX: I’m guessing these semantics, haven’t checked them.
 			return this["paused"] && this["currentTime"] === (this["playbackRate"] < 0 ? 0 : this["duration"]);
 		}
@@ -1472,7 +1472,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 	/// @idl readonly attribute TextTrackList textTracks;
 	/// @stub text tracks aren’t implemented yet—will they be?
 	"textTracks": {
-		get: function() {
+		get() {
 			return document.createElement("video").textTracks;
 		}
 	},
@@ -1485,10 +1485,10 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 	///
 	/// @idl attribute DOMString title;
 	"title": {
-		get: function() {
+		get() {
 			return this["_"].titleElement.textContent;
 		},
-		set: function(value) {
+		set(value) {
 			this["_"].titleElement.textContent = value;
 			this["_"].fireSimpleEvent("titlechange");
 		}
@@ -1498,10 +1498,10 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 	///
 	/// @idl attribute DOMString defaultTitle;
 	"defaultTitle": {
-		get: function() {
+		get() {
 			return this["_"].defaultTitle;
 		},
-		set: function(value) {
+		set(value) {
 			this["_"].defaultTitle = value;
 			this["_"].fireSimpleEvent("titlechange");
 		}
@@ -1512,7 +1512,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 	///
 	/// Read-only as it’s rarely altered alone; use this.resize(cols, this.rows) instead.
 	"cols": {
-		get: function() {
+		get() {
 			return this["_"].terminal.cols;
 		}
 	},
@@ -1522,7 +1522,7 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 	///
 	/// Read-only as it’s rarely altered alone; use this.resize(this.cols, rows) instead.
 	"rows": {
-		get: function() {
+		get() {
 			return this["_"].terminal.rows;
 		}
 	},
@@ -1530,10 +1530,10 @@ Object.defineProperties(TTYPlayerElementPrototype, {
 	// Borrowed from HTMLVideoElement.
 	/// @idl attribute DOMString poster;
 	"poster": {
-		get: function() {
+		get() {
 			return (this.getAttribute("poster") || "").trim();
 		},
-		set: function(value) {
+		set(value) {
 			this.setAttribute("poster", value);
 		}
 	}
@@ -1625,32 +1625,32 @@ TTYPlayerElementPrototype["pretendToBeAVideo"] = function() {
 		// Let’s pretend (badly) that we’re an HTMLVideoElement!
 		"tagName": {value: "VIDEO"},
 		"width": {
-			get: function() {
+			get() {
 				return this.offsetWidth;
 			},
-			set: function(value) {
+			set(value) {
 				// TODO this is a little poor as a technique, refine it.
 				this.style.fontSize = "100%";
 				this.style.fontSize = (value / this.offsetWidth * 100) + "%";
 			}
 		},
 		"height": {
-			get: function() {
+			get() {
 				return this.offsetHeight;
 			},
-			set: function(value) {
+			set(value) {
 				// TODO this is a little poor as a technique, refine it.
 				this.style.fontSize = "100%";
 				this.style.fontSize = (value / this.offsetHeight * 100) + "%";
 			}
 		},
 		"videoWidth": {
-			get: function() {
+			get() {
 				return this["width"];
 			}
 		},
 		"videoHeight": {
-			get: function() {
+			get() {
 				return this["height"];
 			}
 		}
