@@ -619,6 +619,8 @@ class TTYPlayerInternalState {
 			}
 
 			.terminal {
+				overflow: auto;
+				white-space: pre;
 				font-family: var(--terminal-font-family);
 				font-size: var(--terminal-font-size);
 				line-height: initial;
