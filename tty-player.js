@@ -5,6 +5,7 @@
 // @output_file_name tty-player.min.js
 // @compilation_level ADVANCED_OPTIMIZATIONS
 // @language_out ES6
+// @js_externs /** @type {!DOMTokenList} */ Element.prototype.part;
 // ==/ClosureCompiler==
 /* global MediaError, TimeRanges, Terminal, HTMLElement */
 ;(function() {
@@ -151,16 +152,16 @@ function invalidStateError() {
 	document.createElement("video").currentTime = 1;
 }
 
-/** @const */ var NETWORK_EMPTY = 0;
-/** @const */ var NETWORK_IDLE = 1;
-/** @const */ var NETWORK_LOADING = 2;
-/** @const */ var NETWORK_NO_SOURCE = 3;
+const NETWORK_EMPTY = 0;
+const NETWORK_IDLE = 1;
+const NETWORK_LOADING = 2;
+const NETWORK_NO_SOURCE = 3;
 
-/** @const */ var HAVE_NOTHING = 0;
-/** @const */ var HAVE_METADATA = 1;
-/** @const */ var HAVE_CURRENT_DATA = 2;
-/** @const */ var HAVE_FUTURE_DATA = 3;
-/** @const */ var HAVE_ENOUGH_DATA = 4;
+const HAVE_NOTHING = 0;
+const HAVE_METADATA = 1;
+const HAVE_CURRENT_DATA = 2;
+const HAVE_FUTURE_DATA = 3;
+const HAVE_ENOUGH_DATA = 4;
 
 // Annoyingly, with things like MediaError, one apparently can’t construct them in any way.
 // So we fake it like this.
@@ -171,7 +172,7 @@ var MyMediaError = /** @constructor */ function MediaError(code) {
 };
 MyMediaError.prototype = Object.create(MediaError.prototype);
 
-/** @const */ var EMPTY_TIME_RANGES = document.createElement("video").played;
+const EMPTY_TIME_RANGES = document.createElement("video").played;
 
 var MyTimeRanges = /** @constructor */ function TimeRanges(ranges) {
 	Object.defineProperty(this, "length", {value: ranges.length});
@@ -195,19 +196,19 @@ MyTimeRanges.prototype["end"] = function(i) {
 	}
 };
 
-/** @const */ var MEDIA_ERR_ABORTED = 1;
-/** @const */ var MEDIA_ERR_NETWORK = 2;
-/** @const */ var MEDIA_ERR_DECODE = 3;
-/** @const */ var MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
+const MEDIA_ERR_ABORTED = 1;
+const MEDIA_ERR_NETWORK = 2;
+const MEDIA_ERR_DECODE = 3;
+const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
-/** @const */ var ERROR_DETAILS = {
+const ERROR_DETAILS = {
 	1: ["MEDIA_ERR_ABORTED", "The fetching process for the media resource was aborted by the user agent at the user's request."],
 	2: ["MEDIA_ERR_NETWORK", "A network error of some description caused the user agent to stop fetching the media resource, after the resource was established to be usable."],
 	3: ["MEDIA_ERR_DECODE", "An error of some description occurred while decoding the media resource, after the resource was established to be usable."],
 	4: ["MEDIA_ERR_SRC_NOT_SUPPORTED", "The media resource indicated by the \x1b[4msrc\x1b[24m attribute was not suitable."]
 };
 
-/** @const */ var FANCY_TECHNICAL_ERROR_EXPLANATIONS = true;
+const FANCY_TECHNICAL_ERROR_EXPLANATIONS = true;
 
 var menuIdSequence = 0;
 
@@ -287,6 +288,9 @@ Terminal.prototype["reset"] = function() {
 		this["showCursor"]();
 	}
 };
+
+// Our shadow DOM technique (applying the styles only inside the shadow DOM) breaks term.js’s brokenBold calculation. So just assume that bold works.
+Terminal.brokenBold = false;
 
 // IDL for this code:
 //
@@ -378,803 +382,1052 @@ Terminal.prototype["reset"] = function() {
 //                attribute DOMString poster;
 //     };
 
-/** @constructor */
-function TTYPlayerInternalState(ttyPlayer) {
-	this.ttyPlayer = ttyPlayer;
-}
+const TICK = 16;
+const TIME_UPDATE_FREQUENCY = 100;
 
-var ISP = TTYPlayerInternalState.prototype;
+// Not all browsers that support Shadow DOM support Shadow Part (e.g. Safari still doesn’t, at the time of writing). Roughly polyfill it.
+const supportsPart = "part" in Element.prototype;
+const addPart = supportsPart
+	? (element, part) => element.part.add(part)
+	: (element, part) => {
+		const parts = new Set(element.getAttribute("part").split(/\s+/));
+		parts.delete("");
+		parts.add(part);
+		element.setAttribute("part", Array.from(parts).join(" "));
+	};
+const removePart = supportsPart
+	? (element, part) => element.part.remove(part)
+	: (element, part) => {
+		const parts = new Set(element.getAttribute("part").split(/\s+/));
+		parts.delete("");
+		parts.delete(part);
+		element.setAttribute("part", Array.from(parts).join(" "));
+	};
 
-ISP.setUp = function() {
-	var self = this;
-	var ttyPlayer = self.ttyPlayer;
-	self.titleElement = document.createElement("div");
-	self.titleElement.className = "title";
-	ttyPlayer.appendChild(self.titleElement);
+class TTYPlayerInternalState {
+	constructor(ttyPlayer) {
+		var self = this;
+		self.lastTimeUpdate = 0;
+		self.ttyPlayer = ttyPlayer;
+		var shadowRoot = self.shadowRoot = ttyPlayer.attachShadow({mode: 'closed'});
 
-	self.terminal = new Terminal({"useFocus": false});
-	self.terminal.on("title", function(newTitle) {
-		ttyPlayer["title"] = newTitle;
-	});
+		var styleElement = document.createElement('style');
+		styleElement.textContent = `
+			:host {
+				--terminal-font-family: monospace;
+				--terminal-fg: #f0f0f0;
+				--terminal-bg: #000000;
+				display: inline-block;
+				position: relative;
+			}
 
-	self.terminal.open(ttyPlayer);
+			[part~=title] {
+				/* If the containing page wants to display the title, it can do so with 'tty-player::part(title) { display: block }', &c. (Yes, this means that browsers that don’t yet implement ::part can’t have a title. C’est la vie.) */
+				display: none;
+			}
 
-	if (FANCY_TECHNICAL_ERROR_EXPLANATIONS) {
-		ttyPlayer.addEventListener("error", function() {
-			var details = ERROR_DETAILS[self.error.code];
-			self.terminal.reset();
-			self.terminal.write(
-					"\x1b]2;Error :-(\x07" +
-					"\r\n\x1b[1mMediaError.\x1b[31m" + details[0] + "\x1b[m " +
-					"(numeric value " + self.error.code + ")\r\n\r\n" +
-					"    " + details[1] + "\r\n\r\n(Sorry ’bout that.)");
+			:host(:not([controls])) [part~=controls] {
+				display: none;
+			}
+
+			[part~=poster] {
+				/* XXX: <video> has an overlay with play button if [controls] over the poster *image*, but here we have an overlay with play button regardless. Perhaps specifying a poster currentTime or script might work? */
+				background: rgba(53, 47, 47, 0.5);
+				opacity: 0.5;
+				transition: opacity 0.2s linear;
+				background-repeat: no-repeat;
+				background-position: center;
+				background-image: url("data:image/svg+xml,%3C?xml%20version='1.0'%20encoding='UTF-8'%20standalone='no'?%3E%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='66'%20height='66'%3E%3Cfilter%20id='f'%3E%3CfeColorMatrix%20type='matrix'%20values='0%200%200%200%200%200%200%200%200%200%200%200%200%200%200%200%200%200%20.5%200'/%3E%3CfeGaussianBlur%20result='r'%20stdDeviation='2'/%3E%3CfeComposite%20in='SourceGraphic'%20in2='r'/%3E%3C/filter%3E%3Cpath%20fill='%23ddd'%20stroke='%23ccc'%20stroke-width='1'%20d='M33,5.5A27.5,27.5%200%200%200%205.5,33%2027.5,27.5%200%200%200%2033,60.5%2027.5,27.5%200%200%200%2060.5,33%2027.5,27.5%200%200%200%2033,5.5Zm-9.5,13%2025,14.5-25,14.5%200,-29z'%20filter='url(%23f)'/%3E%3C/svg%3E");
+				position: absolute;
+				top: 0;
+				left: 0;
+				right: 0;
+				bottom: 0;
+			}
+
+			:host([controls]) [part~=poster] {
+				bottom: 28px;
+			}
+
+			:host(:hover) [part~=poster] {
+				opacity: 1;
+			}
+
+			[part~=controls] {
+				position: absolute;
+				-webkit-user-select: none;
+				-moz-user-select: none;
+				-ms-user-select: none;
+				user-select: none;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				background: rgba(53, 47, 47, 0.5);
+				opacity: 0;
+				display: flex;
+				flex-direction: row;
+				transition: opacity 0.2s linear;
+				cursor: default;
+			}
+
+			/* Browsers tend to show the controls when a <video> ends, too; I, however, am not doing this for now at least as the controls will overlap with what is often the most important part of the terminal (the bottom). For this reason, I haven’t hooked up any support for that either, only showing controls persistently when the poster is up. */
+			[part~=controls].poster-visible,
+			:host(:hover) [part~=controls] {
+				opacity: 1;
+			}
+
+			[part~=time-slider],
+			[part~=play-pause-button] {
+				margin: 0;
+				padding: 0;
+				border: none;
+				background: none;
+				font: inherit;
+				line-height: inherit;
+				-moz-appearance: none;
+				-webkit-appearance: none;
+			}
+
+			[part~=play-pause-button] {
+				padding: 0;
+				background: none;
+				opacity: 0.75;
+				flex: 0 1 auto;
+				line-height: 1;
+				width: 28px;
+				height: 28px;
+			}
+
+			[part~=play-pause-button]:hover {
+				color: #777;
+				opacity: 1;
+			}
+
+			[part~=time-slider] {
+				flex: 1;
+				height: 8px;
+				margin: 10px 5px;
+			}
+
+			[part~=play-pause-button] {
+				background-repeat: no-repeat;
+				background-position: center;
+			}
+
+			[part~=play-button] {
+				background-image: url("data:image/svg+xml,%3C?xml%20version='1.0'%20encoding='UTF-8'%20standalone='no'?%3E%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='16'%3E%3Cpath%20fill='%23ccc'%20d='M0,0%200,16%2014,8Z'/%3E%3C/svg%3E");
+			}
+
+			[part~=pause-button] {
+				background-image: url("data:image/svg+xml,%3C?xml%20version='1.0'%20encoding='UTF-8'%20standalone='no'?%3E%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='14'%20height='16'%3E%3Cpath%20fill='%23ccc'%20d='M1,0L1,16L5,16L5,0L0,0zM9,0L9,16L13,16L13,0L9,0z'/%3E%3C/svg%3E");
+			}
+
+			[part~=time-slider]:focus {
+				box-shadow: none;
+				outline: none;
+			}
+
+			[part~=time-slider]::-moz-range-track,
+			[part~=time-slider]::-moz-range-thumb,
+			[part~=time-slider]::-moz-range-progress {
+				border-radius: 4px;
+				height: 8px;
+			}
+
+			[part~=time-slider]::-moz-range-track {
+				background: rgba(255, 255, 255, 0.5);
+			}
+
+			[part~=time-slider]::-moz-range-thumb {
+				-moz-appearance: none;
+				width: 0;
+				background: transparent;
+				border: 0;
+				border-radius: 0;
+				box-shadow: 0;
+				position: relative;
+			}
+
+			[part~=time-slider]::-moz-range-progress {
+				background: #fff;
+			}
+
+			[part~=time-slider] {
+				overflow: hidden;
+			}
+
+			[part~=time-slider]::-webkit-slider-runnable-track {
+				-webkit-appearance: none;
+				height: 8px;
+				background: rgba(255, 255, 255, 0.5);
+				//border-radius: 4px;
+			}
+
+			[part~=time-slider]::-webkit-slider-thumb:before {
+				position: absolute;
+				top: 0;
+				right: 50%;
+				left: -9999px;
+				background: #fff;
+				content: '';
+				height: 8px;
+				pointer-events: none;
+			}
+
+			[part~=time-slider]::-webkit-slider-thumb {
+				-webkit-appearance: none;
+				width: 0;
+				height: 0;
+				position: relative;
+			}
+
+			/* I have not altered IE’s styles because I feel them already satisfactory */
+
+			[part~=current-time] {
+				position: absolute;
+				color: #ddd;
+				background: #888;
+				font-family: sans-serif;
+				font-size: 12px;
+				display: block;
+				box-shadow: 0 1px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px rgba(255, 255, 255, 0.2);
+				padding: 0 5px;
+				line-height: 16px;
+				border-radius: 4px;
+				top: -7px;
+			}
+
+			[part~=current-time]::after {
+				content: "";
+				position: absolute;
+				width: 8px;
+				height: 8px;
+				background: linear-gradient(-45deg, #888 50%, transparent 50%);
+				box-shadow: 1px 1px rgba(0, 0, 0, 0.5), 1px 1px 1px rgba(0, 0, 0, 0.5);
+				bottom: -3px;
+				left: 50%;
+				margin-left: -5px;
+				transform: rotate(45deg);
+			}
+
+			[part~=duration] {
+				font-family: sans-serif;
+				font-size: 12px;
+				color: #999;
+				line-height: 18px;
+				padding: 5px;
+			}
+
+			.terminal {
+				font-family: var(--terminal-font-family);
+				font-size: var(--terminal-font-size);
+				line-height: initial;
+				cursor: text;
+				color: var(--terminal-fg);
+				background: var(--terminal-bg);
+			}
+
+			.terminal-cursor {
+				color: var(--terminal-cursor-fg, var(--terminal-bg));
+				background: var(--terminal-cursor-bg, var(--terminal-fg));
+			}
+		`;
+		shadowRoot.appendChild(styleElement);
+
+		var titleElement = self.titleElement = document.createElement("div");
+		addPart(titleElement, "title");
+		shadowRoot.appendChild(titleElement);
+
+		var terminal = self.terminal = new Terminal({"useFocus": false});
+		terminal.on("title", function(newTitle) {
+			ttyPlayer["title"] = newTitle;
 		});
-	}
 
-	var rows = +ttyPlayer.getAttribute("rows");
-	var cols = +ttyPlayer.getAttribute("cols");
-	ttyPlayer["resize"](cols > 0 ? cols : ttyPlayer["cols"],
-						rows > 0 ? rows : ttyPlayer["rows"]);
+		terminal.open(shadowRoot);
+		addPart(terminal.element, "terminal");
 
-	// XXX: properties with names used in the DOM don’t get shrunk by Closure
-	// Compiler’s advanced optimizations, for safety. We could get size down a
-	// smidgeon more by renaming them all, but that’d be uglier.
-	// Candidates: defaultPlaybackRate, playbackRate, currentSrc, readyState, networkState, paused, duration.
+		if (FANCY_TECHNICAL_ERROR_EXPLANATIONS) {
+			ttyPlayer.addEventListener("error", function() {
+				var errorCode = self.error.code;
+				var details = ERROR_DETAILS[errorCode];
+				terminal.reset();
+				terminal.write(
+						"\x1b]2;Error :-(\x07" +
+						"\r\n\x1b[1mMediaError.\x1b[31m" + details[0] + "\x1b[m " +
+						"(numeric value " + errorCode + ")\r\n\r\n" +
+						"    " + details[1] + "\r\n\r\n(Sorry ’bout that.)");
+			});
+		}
 
-	self.defaultPlaybackRate = self.playbackRate = 1;
-	self.defaultPlaybackStartPosition = 0;
-	self.currentSrc = "";
-	self.readyState = HAVE_NOTHING;
-	self.networkState = NETWORK_EMPTY;
-	self.paused = true;
-	self.duration = NaN;
-	self.defaultTitle = ttyPlayer.getAttribute("window-title") || "";
-	self.posterOverlay = document.createElement("tty-player-poster");
-	self.posterOverlay.onclick = function() {
-		ttyPlayer["play"]();
-	};
+		// XXX: properties with names used in the DOM don’t get shrunk by Closure
+		// Compiler’s advanced optimizations, for safety. We could get size down a
+		// smidgeon more by renaming them all, but that’d be uglier.
+		// Candidates: defaultPlaybackRate, playbackRate, currentSrc, readyState, networkState, paused, duration.
 
-	self.terminal.on("resize", function() {
-		// ttyPlayer.rows and ttyPlayer.cols have changed, fire an appropriate event
-		self.fireSimpleEvent("resize");
-	});
-
-	self.menu = makeMenu(ttyPlayer);
-	if (self.menu) {
-		ttyPlayer.appendChild(self.menu);
-		ttyPlayer.setAttribute("contextmenu", self.menu.id);
-	}
-
-	self.controlsElement = document.createElement("tty-player-controls");
-	var play = document.createElement("button");
-	play.className = "play";
-	play.onclick = function() {
-		if (ttyPlayer["paused"]) {
+		self.defaultPlaybackRate = self.playbackRate = 1;
+		self.defaultPlaybackStartPosition = 0;
+		self.currentSrc = "";
+		self.readyState = HAVE_NOTHING;
+		self.networkState = NETWORK_EMPTY;
+		self.paused = true;
+		self.duration = NaN;
+		self.defaultTitle = "";
+		var posterOverlay = self.posterOverlay = document.createElement("div");
+		addPart(posterOverlay, "poster");
+		posterOverlay.onclick = function() {
 			ttyPlayer["play"]();
-		} else {
-			ttyPlayer["pause"]();
-		}
-	};
-	ttyPlayer.addEventListener("play", function() {
-		play.className = "pause";
-	});
-	ttyPlayer.addEventListener("pause", function() {
-		play.className = "play";
-	});
-	self.currentTimeElement = document.createElement("span");
-	self.currentTimeElement.className = "current-time";
-	self.currentTimeElement.textContent = "0:00";
-	self.durationElement = document.createElement("span");
-	self.durationElement.className = "duration";
-	self.durationElement.textContent = "0:00";
-	self.progressElement = document.createElement("input");
-	self.progressElement.type = "range";
-	self.progressElement.value = 0;
-	self.progressElement.min = 0;
-	self.progressElement.step = "any";
-	var skipChange = false;
-	self.progressElement.addEventListener("input", function() {
-		if (!skipChange) {
-			skipChange = true;
-			self.semipaused = true;
-			ttyPlayer["currentTime"] = self.progressElement.value;
-			self.updateCurrentTimeElement();
-			skipChange = false;
-		}
-	});
-	self.progressElement.addEventListener("change", function() {
-		if (!skipChange) {
-			skipChange = true;
-			self.semipaused = false;
-			ttyPlayer["currentTime"] = self.progressElement.value;
-			self.updateCurrentTimeElement();
-			skipChange = false;
-		}
-	});
-	ttyPlayer.addEventListener("durationchange", function() {
-		self.progressElement.max = self.duration;
-		self.durationElement.textContent = formatTime(self.duration);
-	});
-	ttyPlayer.addEventListener("timeupdate", function() {
-		if (!skipChange) {
-			skipChange = true;
-			self.progressElement.value = self.currentTime;
-			self.updateCurrentTimeElement();
-			skipChange = false;
-		}
-	});
-	self.controlsElement.appendChild(play);
-	self.controlsElement.appendChild(self.currentTimeElement);
-	self.controlsElement.appendChild(self.progressElement);
-	self.controlsElement.appendChild(self.durationElement);
-	ttyPlayer.appendChild(self.posterOverlay);
-	ttyPlayer.appendChild(self.controlsElement);
-	self.showPoster = true;
-};
+		};
 
-Object.defineProperties(ISP, {
-	/** @lends {ISP} */
-	showPoster: {
-		get() {
-			return this._showPoster;
-		},
-		set(newValue) {
-			// TODO: this is problematic because it doesn’t keep track of what
-			// poster is active, it just uses the current value of poster. We
-			// should probably store the value of poster and use it for
-			// removing it.
-			var self = this;
-			var oldValue = self._showPoster;
-			newValue = !!newValue;
-
-			var newPoster = classifyPosterURL(self.ttyPlayer["poster"]);
-			self._showPoster = !!newValue;
-
-			// We don’t show the overlay if there is an error
-			var showOverlay = newValue && !self.error;
-
-			self.posterOverlay.style.display = showOverlay ? "" : "none";
-			self.controlsElement.classList[showOverlay ? "add" : "remove"]("poster");
-			self.progressElement.disabled = newValue;
-			self.controlsShownOrHidden();
-
-			if (oldValue === newValue && self.activePoster === newPoster) {
-				// No change to make
-				return;
+		var controlsElement = self.controlsElement = document.createElement("div");
+		addPart(controlsElement, "controls");
+		var play = document.createElement("button");
+		addPart(play, "play-pause-button");
+		addPart(play, "play-button");
+		play.onclick = function() {
+			if (ttyPlayer["paused"]) {
+				ttyPlayer["play"]();
+			} else {
+				ttyPlayer["pause"]();
 			}
-
-			// If we need to do anything special to remove a poster, here’s what we’ll do:
-			// if (oldValue) {
-			// 	switch (self.activePoster.type) {
-			// 		case "foo":
-			// 			…
-			// 	}
-			// }
-
-			self.activePoster = newPoster;
-
-			if (oldValue || newValue) {
-				// Yes, we’re missing the optimisation possibility of poster=npt:X
-				// changing to poster=npt:Y where Y > X. Seriously, adjusting
-				// poster *at all* is rare enough that I don’t care.
-				self.resetTerminal();
+		};
+		ttyPlayer.addEventListener("play", function() {
+			addPart(play, "pause-button");
+			removePart(play, "play-button");
+		});
+		ttyPlayer.addEventListener("pause", function() {
+			removePart(play, "pause-button");
+			addPart(play, "play-button");
+		});
+		var currentTimeElement = self.currentTimeElement = document.createElement("span");
+		addPart(currentTimeElement, "current-time");
+		currentTimeElement.textContent = "0:00";
+		var durationElement = self.durationElement = document.createElement("span");
+		addPart(durationElement, "duration");
+		durationElement.textContent = "0:00";
+		var progressElement = self.progressElement = document.createElement("input");
+		addPart(progressElement, "time-slider");
+		progressElement.type = "range";
+		progressElement.value = 0;
+		progressElement.min = 0;
+		progressElement.step = "any";
+		var skipChange = false;
+		progressElement.addEventListener("input", function() {
+			if (!skipChange) {
+				skipChange = true;
+				self.semipaused = true;
+				ttyPlayer["currentTime"] = progressElement.value;
+				self.updateCurrentTimeElement();
+				skipChange = false;
 			}
+		});
+		progressElement.addEventListener("change", function() {
+			if (!skipChange) {
+				skipChange = true;
+				self.semipaused = false;
+				ttyPlayer["currentTime"] = progressElement.value;
+				self.updateCurrentTimeElement();
+				skipChange = false;
+			}
+		});
+		ttyPlayer.addEventListener("durationchange", function() {
+			progressElement.max = self.duration;
+			durationElement.textContent = formatTime(self.duration);
+		});
+		ttyPlayer.addEventListener("timeupdate", function() {
+			if (!skipChange) {
+				skipChange = true;
+				progressElement.value = self.currentTime;
+				self.updateCurrentTimeElement();
+				skipChange = false;
+			}
+		});
+		controlsElement.appendChild(play);
+		controlsElement.appendChild(currentTimeElement);
+		controlsElement.appendChild(progressElement);
+		controlsElement.appendChild(durationElement);
+		shadowRoot.appendChild(posterOverlay);
+		shadowRoot.appendChild(controlsElement);
 
-			if (newValue) {
-				// Show the new poster
-				switch (newPoster.type) {
-					case "npt":
-						// We have an NPT poster to create.
-						self.resetTerminal();
+		self.menu = makeMenu(ttyPlayer);
+	}
 
-						var realShowPoster = function() {
-							if (newValue !== self._showPoster) {
-								// Sorry, you took too long and I don’t want to do anything now;
-								// something else is doing it.
-								return;
-							}
+	setUp() {
+		var self = this;
+		var ttyPlayer = self.ttyPlayer;
+		self.isSetUp = true;
+		// Any things that required reading children or attributes of ttyPlayer must sit in here rather than the constructor.
 
-							if (newValue) {
-								var currentTime = self.currentTime;
-								var semipaused = self.semipaused;
-								self.semipaused = true;
-								self.currentTime = newPoster.time;
-								self.nextDataIndex = 0;
-								self.render();
-								self.semipaused = semipaused;
-								self.currentTime = currentTime;
-							}
-						};
+		ttyPlayer.setAttribute("contextmenu", self.menu.id);
+		var rows = +ttyPlayer.getAttribute("rows");
+		var cols = +ttyPlayer.getAttribute("cols");
+		ttyPlayer["resize"](cols > 0 ? cols : ttyPlayer["cols"],
+							rows > 0 ? rows : ttyPlayer["rows"]);
+		self.terminal.on("resize", function() {
+			// ttyPlayer.rows and ttyPlayer.cols have changed, fire an appropriate event
+			self.fireSimpleEvent("resize");
+		});
 
-						if (self.data) {
-							realShowPoster();
-						} else {
-							var loaded = function() {
-								self.ttyPlayer.removeEventListener("canplaythrough", loaded);
-								realShowPoster();
-							};
-							self.ttyPlayer.addEventListener("canplaythrough", loaded);
-							self.loadIfNotLoading();
+		self.defaultTitle = ttyPlayer.getAttribute("window-title") || "";
+
+		self.setShowPoster(true);
+	}
+
+	setShowPoster(newValue) {
+		// TODO: this is problematic because it doesn’t keep track of what
+		// poster is active, it just uses the current value of poster. We
+		// should probably store the value of poster and use it for
+		// removing it.
+		var self = this;
+		var oldValue = self.showPoster;
+		newValue = !!newValue;
+
+		var newPoster = classifyPosterURL(self.ttyPlayer["poster"]);
+		self.showPoster = !!newValue;
+
+		// We don’t show the overlay if there is an error
+		var showOverlay = newValue && !self.error;
+
+		self.posterOverlay.style.display = showOverlay ? "" : "none";
+		self.controlsElement.classList[showOverlay ? "add" : "remove"]("poster-visible");
+		self.progressElement.disabled = newValue;
+		self.controlsShownOrHidden();
+
+		if (oldValue === newValue && self.activePoster === newPoster) {
+			// No change to make
+			return;
+		}
+
+		// If we need to do anything special to remove a poster, here’s what we’ll do:
+		// if (oldValue) {
+		// 	switch (self.activePoster.type) {
+		// 		case "foo":
+		// 			…
+		// 	}
+		// }
+
+		self.activePoster = newPoster;
+
+		if (oldValue || newValue) {
+			// Yes, we’re missing the optimisation possibility of poster=npt:X
+			// changing to poster=npt:Y where Y > X. Seriously, adjusting
+			// poster *at all* is rare enough that I don’t care.
+			self.resetTerminal();
+		}
+
+		if (newValue) {
+			// Show the new poster
+			switch (newPoster.type) {
+				case "npt":
+					// We have an NPT poster to create.
+					self.resetTerminal();
+
+					var realShowPoster = function() {
+						if (newValue !== self.showPoster) {
+							// Sorry, you took too long and I don’t want to do anything now;
+							// something else is doing it.
+							return;
 						}
-						break;
-					case "text":
-						self.resetTerminal();
-						self.terminal.write(newPoster.data);
-				}
+
+						if (newValue) {
+							var currentTime = self.currentTime;
+							var semipaused = self.semipaused;
+							self.semipaused = true;
+							self.currentTime = newPoster.time;
+							self.nextDataIndex = 0;
+							self.render();
+							self.semipaused = semipaused;
+							self.currentTime = currentTime;
+						}
+					};
+
+					if (self.data) {
+						realShowPoster();
+					} else {
+						var loaded = function() {
+							self.ttyPlayer.removeEventListener("canplaythrough", loaded);
+							realShowPoster();
+						};
+						self.ttyPlayer.addEventListener("canplaythrough", loaded);
+						self.loadIfNotLoading();
+					}
+					break;
+				case "text":
+					self.resetTerminal();
+					self.terminal.write(newPoster.data);
 			}
 		}
 	}
-});
 
-/// Firing a simple event named e means that a trusted event with the name
-/// e, which does not bubble (except where otherwise stated) and is not
-/// cancelable (except where otherwise stated), and which uses the Event
-/// interface, must be created and dispatched at the given target.
-/// INCONSISTENCY: isTrusted = false
-ISP.fireSimpleEvent = function(name) {
-	var event = document.createEvent("HTMLEvents");
-	event.initEvent(name, false, false);
-	var f = this.ttyPlayer["on" + name];
-	if (typeof f === "function") {
-		f(event);
-	}
-	this.ttyPlayer.dispatchEvent(event);
-};
-
-ISP.controlsShownOrHidden = function() {
-	this.updateCurrentTimeElement();
-	if (this.menu) {
-		this.menu.onControlsShownOrHidden();
-	}
-};
-
-ISP.updateCurrentTimeElement = function() {
-	this.currentTimeElement.textContent = formatTime(this.currentTime);
-	var left = this.progressElement.offsetLeft - (this.currentTimeElement.offsetWidth / 2);
-	if (!isNaN(this.duration)) {
-		left += this.currentTime / this.duration * this.progressElement.offsetWidth;
-	}
-	this.currentTimeElement.style.left = left + "px";
-};
-
-/** @const */ var TICK = 16;
-/** @const */ var TIME_UPDATE_FREQUENCY = 100;
-ISP.lastTimeUpdate = 0;
-
-ISP.render = function() {
-	// Should the currently rendered frame (next - 1) be drawn?
-	if (this.nextDataIndex > 0 && this.data[this.nextDataIndex - 1][1] > this.currentTime) {
-		// No, but undoing isn’t possible, so we must replay from the start.
-		// This is highly inefficient; for large scripts it’s utterly untenable.
-		this.resetTerminal();
-		this.nextDataIndex = 0;
-	}
-	while (this.nextDataIndex < this.data.length && this.data[this.nextDataIndex][1] <= this.currentTime) {
-		this.terminal.write(this.data[this.nextDataIndex][0]);
-		this.nextDataIndex++;
+	/// Firing a simple event named e means that a trusted event with the name
+	/// e, which does not bubble (except where otherwise stated) and is not
+	/// cancelable (except where otherwise stated), and which uses the Event
+	/// interface, must be created and dispatched at the given target.
+	/// INCONSISTENCY: isTrusted = false
+	fireSimpleEvent(name) {
+		var event = document.createEvent("HTMLEvents");
+		event.initEvent(name, false, false);
+		var f = this.ttyPlayer["on" + name];
+		if (typeof f === "function") {
+			f(event);
+		}
+		this.ttyPlayer.dispatchEvent(event);
 	}
 
-	if (this.semipaused) {
-		return;
+	controlsShownOrHidden() {
+		this.updateCurrentTimeElement();
+		if (this.menu) {
+			this.menu.onControlsShownOrHidden();
+		}
 	}
 
-	// Have we reached the end? Let’s stop.
-	if ((this.currentTime >= this.duration && this.playbackRate > 0) ||
-			(this.currentTime <= 0 && this.playbackRate < 0)) {
-		if (this.ttyPlayer["loop"]) {
-			this.ttyPlayer["currentTime"] = this.playbackRate > 0 ? 0 : this.duration;
+	updateCurrentTimeElement() {
+		this.currentTimeElement.textContent = formatTime(this.currentTime);
+		var left = this.progressElement.offsetLeft - (this.currentTimeElement.offsetWidth / 2);
+		if (!isNaN(this.duration)) {
+			left += this.currentTime / this.duration * this.progressElement.offsetWidth;
+		}
+		this.currentTimeElement.style.left = left + "px";
+	}
+
+	render() {
+		// Should the currently rendered frame (next - 1) be drawn?
+		if (this.nextDataIndex > 0 && this.data[this.nextDataIndex - 1][1] > this.currentTime) {
+			// No, but undoing isn’t possible, so we must replay from the start.
+			// This is highly inefficient; for large scripts it’s utterly untenable.
+			this.resetTerminal();
+			this.nextDataIndex = 0;
+		}
+		while (this.nextDataIndex < this.data.length && this.data[this.nextDataIndex][1] <= this.currentTime) {
+			this.terminal.write(this.data[this.nextDataIndex][0]);
+			this.nextDataIndex++;
+		}
+
+		if (this.semipaused) {
+			return;
+		}
+
+		// Have we reached the end? Let’s stop.
+		if ((this.currentTime >= this.duration && this.playbackRate > 0) ||
+				(this.currentTime <= 0 && this.playbackRate < 0)) {
+			if (this.ttyPlayer["loop"]) {
+				this.ttyPlayer["currentTime"] = this.playbackRate > 0 ? 0 : this.duration;
+			} else {
+				this.fireSimpleEvent("timeupdate");
+				this.ttyPlayer["pause"]();
+				this.fireSimpleEvent("ended");
+			}
 		} else {
-			this.fireSimpleEvent("timeupdate");
-			this.ttyPlayer["pause"]();
-			this.fireSimpleEvent("ended");
-		}
-	} else {
-		// Do we need to fire a timeupdate event? We should do them every 66–350ms; Firefox does 250 for video, but because the average length is going to be shorter and because I can, I’m going for 100ms.
-		var time = +new Date();
-		if (time - this.lastTimeUpdate >= TIME_UPDATE_FREQUENCY) {
-			this.lastTimeUpdate = time;
-			this.fireSimpleEvent("timeupdate");
+			// Do we need to fire a timeupdate event? We should do them every 66–350ms; Firefox does 250 for video, but because the average length is going to be shorter and because I can, I’m going for 100ms.
+			var time = +new Date();
+			if (time - this.lastTimeUpdate >= TIME_UPDATE_FREQUENCY) {
+				this.lastTimeUpdate = time;
+				this.fireSimpleEvent("timeupdate");
+			}
 		}
 	}
-};
 
-ISP.resetTerminal = function() {
-	this.terminal.reset();
-	this.ttyPlayer["title"] = this.defaultTitle;
-};
-
-ISP.loadIfNotLoading = function() {
-	if (this.networkState < NETWORK_LOADING) {
-		this.mediaLoadAlgorithm();
-	}
-};
-
-ISP.mediaLoadAlgorithm = function() {
-	this.resetTerminal();
-
-	// > The media load algorithm consists of the following steps.
-
-	// > 1. Abort any already-running instance of the resource selection
-	// >    algorithm for this element.
-	if (this.resourceFetchXHR) {
-		this.resourceFetchXHR.abort();
+	resetTerminal() {
+		this.terminal.reset();
+		this.ttyPlayer["title"] = this.defaultTitle;
 	}
 
-	// > 2. If there are any tasks from the media element's media element
-	// >    event task source in one of the task queues, then remove those
-	// >    tasks.
-	// >
-	// >    If there are any tasks that were queued by the resource
-	// >    selection algorithm (including the algorithms that it itself
-	// >    invokes) for this same media element from the DOM manipulation
-	// >    task source in one of the task queues, then remove those tasks.
-	// >
-	// >    Note: Basically, pending events and callbacks for the media
-	// >    element are discarded when the media element starts loading a
-	// >    new resource.
-	//
-	// [Nothing to do, we aren’t queuing events.]
-
-	// > 3. If the media element's networkState is set to NETWORK_LOADING
-	// >    or NETWORK_IDLE, queue a task to fire a simple event named
-	// >    abort at the media element.
-	if (this.networkState === NETWORK_LOADING ||
-			this.networkState === NETWORK_IDLE) {
-		this.fireSimpleEvent("abort");
+	loadIfNotLoading() {
+		if (this.networkState < NETWORK_LOADING) {
+			this.mediaLoadAlgorithm();
+		}
 	}
 
-	// > 4. If the media element's networkState is not set to
-	// >    NETWORK_EMPTY, then run these substeps:
-	if (this.networkState !== NETWORK_EMPTY) {
-		// > 1. Queue a task to fire a simple event named emptied at the
-		// >    media element.
-		this.fireSimpleEvent("emptied");
+	mediaLoadAlgorithm() {
+		this.resetTerminal();
 
-		// > 2. If a fetching process is in progress for the media element,
-		// >    the user agent should stop it.
+		// > The media load algorithm consists of the following steps.
+
+		// > 1. Abort any already-running instance of the resource selection
+		// >    algorithm for this element.
+		if (this.resourceFetchXHR) {
+			this.resourceFetchXHR.abort();
+		}
+
+		// > 2. If there are any tasks from the media element's media element
+		// >    event task source in one of the task queues, then remove those
+		// >    tasks.
+		// >
+		// >    If there are any tasks that were queued by the resource
+		// >    selection algorithm (including the algorithms that it itself
+		// >    invokes) for this same media element from the DOM manipulation
+		// >    task source in one of the task queues, then remove those tasks.
+		// >
+		// >    Note: Basically, pending events and callbacks for the media
+		// >    element are discarded when the media element starts loading a
+		// >    new resource.
+		//
+		// [Nothing to do, we aren’t queuing events.]
+
+		// > 3. If the media element's networkState is set to NETWORK_LOADING
+		// >    or NETWORK_IDLE, queue a task to fire a simple event named
+		// >    abort at the media element.
+		if (this.networkState === NETWORK_LOADING ||
+				this.networkState === NETWORK_IDLE) {
+			this.fireSimpleEvent("abort");
+		}
+
+		// > 4. If the media element's networkState is not set to
+		// >    NETWORK_EMPTY, then run these substeps:
+		if (this.networkState !== NETWORK_EMPTY) {
+			// > 1. Queue a task to fire a simple event named emptied at the
+			// >    media element.
+			this.fireSimpleEvent("emptied");
+
+			// > 2. If a fetching process is in progress for the media element,
+			// >    the user agent should stop it.
+			// TODO.
+
+			// > 3. Forget the media element's media-resource-specific tracks.
+			// [Not applicable.]
+
+			// > 4. If readyState is not set to HAVE_NOTHING, then set it to
+			// >    that state.
+			this.readyState = HAVE_NOTHING;
+
+			// > 5. If the paused attribute is false, then set it to true.
+			this.paused = true;
+			clearInterval(this.ticker);
+
+			// > 6. If seeking is true, set it to false.
+			// [Not applicable.]
+
+			// > 7. Set the current playback position to 0.
+			// >
+			// >    Set the official playback position to 0.
+			// >
+			// >    If this changed the official playback position, then queue
+			// >    a task to fire a simple event named timeupdate at the
+			// >    media element.
+			var oldTime = this.currentTime;
+			this.currentTime = 0;
+			this.nextDataIndex = 0;
+			if (oldTime !== 0) {
+				this.fireSimpleEvent("timeupdate");
+			}
+
+			// > 8. Set the initial playback position to 0.
+			// Not applicable (TODO? Might be useful?)
+
+			// > 9. Set the timeline offset to Not-a-Number (NaN).
+			// TODO (haven’t finished supporting timeline offsets)
+
+			// > 10. Update the duration attribute to Not-a-Number (NaN).
+			// >
+			// >     The user agent will not fire a durationchange event for
+			// >     this particular change of the duration.
+			this.data = null;
+			this.duration = NaN;
+		}
+
+		// > 5. Set the playbackRate attribute to the value of the defaultPlaybackRate attribute.
+		this.playbackRate = this.defaultPlaybackRate;
+
+		// > 6. Set the error attribute to null and the autoplaying flag to true.
+		this.error = null;
 		// TODO.
 
-		// > 3. Forget the media element's media-resource-specific tracks.
+		// > 7. Invoke the media element's resource selection algorithm.
+		this.resourceSelectionAlgorithm();
+
+		// > 8. Note: Playback of any previously playing media resource for this element stops.
+		// Already done.
+	}
+
+	resourceSelectionAlgorithm() {
+		var self = this;
+		// We use a simplified version of the resource selection algorithm,
+		// as we support only one type, don’t use <source> (src only) and
+		// handle synchronosity differently.
+
+		// > 1. Set the element's networkState attribute to the
+		// >    NETWORK_NO_SOURCE value.
+		self.networkState = NETWORK_NO_SOURCE;
+
+		// > 2. Set the element's show poster flag to true.
+		self.setShowPoster(true);
+
+		// > 3. Set the media element's delaying-the-load-event flag to
+		// >    true (this delays the load event).
+		// TODO.
+
+		// > 4. Asynchronously await a stable state, allowing the task that
+		// >    invoked this algorithm to continue. The synchronous section
+		// >    consists of all the remaining steps of this algorithm until
+		// >    the algorithm says the synchronous section has ended.
+		// >    (Steps in synchronous sections are marked with ⌛.)
+
+		// > 5. ⌛ If the media element's blocked-on-parser flag is false,
+		// >    then populate the list of pending text tracks.
 		// [Not applicable.]
 
-		// > 4. If readyState is not set to HAVE_NOTHING, then set it to
-		// >    that state.
-		this.readyState = HAVE_NOTHING;
-
-		// > 5. If the paused attribute is false, then set it to true.
-		this.paused = true;
-		clearInterval(this.ticker);
-
-		// > 6. If seeking is true, set it to false.
-		// [Not applicable.]
-
-		// > 7. Set the current playback position to 0.
+		// > 6. ⌛ If the media element has a src attribute, then let mode
+		// >    be attribute.
 		// >
-		// >    Set the official playback position to 0.
+		// >    ⌛ Otherwise, if the media element does not have a src
+		// >    attribute but has a source element child, then let mode be
+		// >    children and let candidate be the first such source element
+		// >    child in tree order.
 		// >
-		// >    If this changed the official playback position, then queue
-		// >    a task to fire a simple event named timeupdate at the
-		// >    media element.
-		var oldTime = this.currentTime;
-		this.currentTime = 0;
-		this.nextDataIndex = 0;
-		if (oldTime !== 0) {
-			this.fireSimpleEvent("timeupdate");
+		// >    ⌛ Otherwise the media element has neither a src attribute
+		// >    nor a source element child: set the networkState to
+		// >    NETWORK_EMPTY, and abort these steps; the synchronous
+		// >    section ends.
+		//
+		// We don’t support <source> at present, so this is simpler.
+		var src = self.ttyPlayer.getAttribute("src");
+		if (src === null) {
+			self.networkState = NETWORK_EMPTY;
+			return;
 		}
 
-		// > 8. Set the initial playback position to 0.
-		// Not applicable (TODO? Might be useful?)
+		// > 7. ⌛ Set the media element's networkState to NETWORK_LOADING.
+		self.networkState = NETWORK_LOADING;
 
-		// > 9. Set the timeline offset to Not-a-Number (NaN).
-		// TODO (haven’t finished supporting timeline offsets)
+		// > 8. ⌛ Queue a task to fire a simple event named loadstart at
+		// >    the media element.
+		self.fireSimpleEvent("loadstart");
 
-		// > 10. Update the duration attribute to Not-a-Number (NaN).
-		// >
-		// >     The user agent will not fire a durationchange event for
-		// >     this particular change of the duration.
-		this.data = null;
-		this.duration = NaN;
+		// > 9. If mode is attribute, then run these substeps:
+		// [We don’t support <source>, so this is guaranteed.]
+
+		// > 1. ⌛ If the src attribute's value is the empty string, then
+		// >    end the synchronous section, and jump down to the failed
+		// >    with attribute step below.
+		if (src === "") {
+			return self.resourceSelectionAlgorithmFailedWithAttribute();
+		}
+
+		// > 2. ⌛ Let absolute URL be the absolute URL that would have
+		// >    resulted from resolving the URL specified by the src
+		// >    attribute's value relative to the media element when the
+		// >    src attribute was last changed.
+		var absoluteURL = new URL(src.trim(), self.ttyPlayer.baseURI);
+
+		// > 3. ⌛ If absolute URL was obtained successfully, set the
+		// >    currentSrc attribute to absolute URL.
+		self.currentSrc = absoluteURL.toString();
+
+		// > 4. End the synchronous section, continuing the remaining steps
+		// >    asynchronously.
+		setTimeout(function() {
+
+			// > 5. If absolute URL was obtained successfully, run the resource
+			// >    fetch algorithm with absolute URL. If that algorithm
+			// >    returns without aborting this one, then the load failed.
+			// Due to the simpler model used, supporting aborting isn’t necessary.
+			self.resourceFetchAlgorithm();
+		}, 0);
 	}
 
-	// > 5. Set the playbackRate attribute to the value of the defaultPlaybackRate attribute.
-	this.playbackRate = this.defaultPlaybackRate;
+	resourceSelectionAlgorithmFailedWithAttribute() {
+		// > 6. Failed with attribute: Reaching this step indicates that
+		// >    the media resource failed to load or that the given URL
+		// >    could not be resolved. Queue a task to run the following
+		// >    steps, using the DOM manipulation task source:
 
-	// > 6. Set the error attribute to null and the autoplaying flag to true.
-	this.error = null;
-	// TODO.
+		// >     1. Set the error attribute to a new MediaError object whose code attribute is set to MEDIA_ERR_SRC_NOT_SUPPORTED.
+		this.error = new MyMediaError(MEDIA_ERR_SRC_NOT_SUPPORTED);
 
-	// > 7. Invoke the media element's resource selection algorithm.
-	this.resourceSelectionAlgorithm();
-
-	// > 8. Note: Playback of any previously playing media resource for this element stops.
-	// Already done.
-};
-
-ISP.resourceSelectionAlgorithm = function() {
-	var self = this;
-	// We use a simplified version of the resource selection algorithm,
-	// as we support only one type, don’t use <source> (src only) and
-	// handle synchronosity differently.
-
-	// > 1. Set the element's networkState attribute to the
-	// >    NETWORK_NO_SOURCE value.
-	self.networkState = NETWORK_NO_SOURCE;
-
-	// > 2. Set the element's show poster flag to true.
-	self.showPoster = true;
-
-	// > 3. Set the media element's delaying-the-load-event flag to
-	// >    true (this delays the load event).
-	// TODO.
-
-	// > 4. Asynchronously await a stable state, allowing the task that
-	// >    invoked this algorithm to continue. The synchronous section
-	// >    consists of all the remaining steps of this algorithm until
-	// >    the algorithm says the synchronous section has ended.
-	// >    (Steps in synchronous sections are marked with ⌛.)
-
-	// > 5. ⌛ If the media element's blocked-on-parser flag is false,
-	// >    then populate the list of pending text tracks.
-	// [Not applicable.]
-
-	// > 6. ⌛ If the media element has a src attribute, then let mode
-	// >    be attribute.
-	// >
-	// >    ⌛ Otherwise, if the media element does not have a src
-	// >    attribute but has a source element child, then let mode be
-	// >    children and let candidate be the first such source element
-	// >    child in tree order.
-	// >
-	// >    ⌛ Otherwise the media element has neither a src attribute
-	// >    nor a source element child: set the networkState to
-	// >    NETWORK_EMPTY, and abort these steps; the synchronous
-	// >    section ends.
-	//
-	// We don’t support <source> at present, so this is simpler.
-	var src = self.ttyPlayer.getAttribute("src");
-	if (src === null) {
-		self.networkState = NETWORK_EMPTY;
-		return;
-	}
-
-	// > 7. ⌛ Set the media element's networkState to NETWORK_LOADING.
-	self.networkState = NETWORK_LOADING;
-
-	// > 8. ⌛ Queue a task to fire a simple event named loadstart at
-	// >    the media element.
-	self.fireSimpleEvent("loadstart");
-
-	// > 9. If mode is attribute, then run these substeps:
-	// [We don’t support <source>, so this is guaranteed.]
-
-	// > 1. ⌛ If the src attribute's value is the empty string, then
-	// >    end the synchronous section, and jump down to the failed
-	// >    with attribute step below.
-	if (src === "") {
-		return self.resourceSelectionAlgorithmFailedWithAttribute();
-	}
-
-	// > 2. ⌛ Let absolute URL be the absolute URL that would have
-	// >    resulted from resolving the URL specified by the src
-	// >    attribute's value relative to the media element when the
-	// >    src attribute was last changed.
-	var absoluteURL = new URL(src.trim(), self.ttyPlayer.baseURI);
-
-	// > 3. ⌛ If absolute URL was obtained successfully, set the
-	// >    currentSrc attribute to absolute URL.
-	self.currentSrc = absoluteURL.toString();
-
-	// > 4. End the synchronous section, continuing the remaining steps
-	// >    asynchronously.
-	setTimeout(function() {
-
-		// > 5. If absolute URL was obtained successfully, run the resource
-		// >    fetch algorithm with absolute URL. If that algorithm
-		// >    returns without aborting this one, then the load failed.
-		// Due to the simpler model used, supporting aborting isn’t necessary.
-		self.resourceFetchAlgorithm();
-	}, 0);
-};
-
-ISP.resourceSelectionAlgorithmFailedWithAttribute = function() {
-	// > 6. Failed with attribute: Reaching this step indicates that
-	// >    the media resource failed to load or that the given URL
-	// >    could not be resolved. Queue a task to run the following
-	// >    steps, using the DOM manipulation task source:
-
-	// >     1. Set the error attribute to a new MediaError object whose code attribute is set to MEDIA_ERR_SRC_NOT_SUPPORTED.
-	this.error = new MyMediaError(MEDIA_ERR_SRC_NOT_SUPPORTED);
-
-	// >     2. Forget the media element's media-resource-specific tracks.
-	// [Nothing to do.]
-
-	// >     3. Set the element's networkState attribute to the NETWORK_NO_SOURCE value.
-	this.networkState = NETWORK_NO_SOURCE;
-
-	// >     4. Set the element's show poster flag to true.
-	this.showPoster = true;
-
-	// >     5. Fire a simple event named error at the media element.
-	this.fireSimpleEvent("error");
-
-	// >     6. Set the element's delaying-the-load-event flag to false. This stops delaying the load event.
-	//this.delayingTheLoadEvent = false;
-
-	// > 7. Wait for the task queued by the previous step to have executed.
-	// [Not queueing tasks, so nothing to do.]
-
-	// > 8. Abort these steps. Until the load() method is invoked or the src attribute is changed, the element won't attempt to load another resource.
-};
-
-ISP.resourceFetchAlgorithm = function() {
-	var self = this;
-	function finishResourceFetchAlgorithm() {
-		delete self.resourceFetchXHR;
-	}
-
-	function continueResourceFetchAlgorithm(data) {
-		// > Once enough of the media data has been fetched to determine
-		// > the duration of the media resource, its dimensions, and other
-		// > metadata:
-		// >
-		// > This indicates that the resource is usable. The user agent
-		// > must follow these substeps:
-		// >
-		// > 1. Establish the media timeline for the purposes of the
-		// >    current playback position, the earliest possible position,
-		// >    and the initial playback position, based on the media data.
-		// [TODO support such things?]
-
-		// > 2. Update the timeline offset to the date and time that
-		// >    corresponds to the zero time in the media timeline
-		// >    established in the previous step, if any. If no explicit
-		// >    time and date is given by the media resource, the timeline
-		// >    offset must be set to Not-a-Number (NaN).
+		// >     2. Forget the media element's media-resource-specific tracks.
 		// [Nothing to do.]
 
-		// > 3. Set the current playback position and the official playback
-		// >    position to the earliest possible position.
-		self.currentTime = 0;
-		self.nextDataIndex = 0;
+		// >     3. Set the element's networkState attribute to the NETWORK_NO_SOURCE value.
+		this.networkState = NETWORK_NO_SOURCE;
 
-		// > 4. Update the duration attribute with the time of the last
-		// >    frame of the resource, if known, on the media timeline
-		// >    established above. If it is not known (e.g. a stream that
-		// >    is in principle infinite), update the duration attribute to
-		// >    the value positive Infinity.
-		// >
-		// >    Note: The user agent will queue a task to fire a simple
-		// >    event named durationchange at the element at this point.
-		self.data = data.data;
-		self.duration = data.data.length === 0 ? 0 : data.data[data.data.length - 1][1];
-		self.fireSimpleEvent("durationchange");
+		// >     4. Set the element's show poster flag to true.
+		this.setShowPoster(true);
 
-		// > 5. For video elements, set the videoWidth and videoHeight
-		// >    attributes, and queue a task to fire a simple event named
-		// >    resize at the media element.
-		// >
-		// >    Note: Further resize events will be fired if the dimensions
-		// >    subsequently change.
-		// TODO: allow this to be written on the HTML
-		// TODO: modify the file format to track window sizes, then do
-		// something like this (ttyWidth and ttyHeight, in chars, I
-		// think).
-		// These are taken straight from term.js; TODO: modify it to send resize events.
-		if (data.dimensions) {
-			self.ttyPlayer["resize"](data.dimensions.cols, data.dimensions.rows);
-		}
+		// >     5. Fire a simple event named error at the media element.
+		this.fireSimpleEvent("error");
 
-		// XXX: the spec mentions getStartDate(), which data.startDate
-		// covers, but Firefox and Chrome at least (dunno about others)
-		// don’t implement that, so I’m not doing anything with it yet.
+		// >     6. Set the element's delaying-the-load-event flag to false. This stops delaying the load event.
+		//this.delayingTheLoadEvent = false;
 
-		// We could render the first frame if we wanted to. Should we?
-		//self.render();
+		// > 7. Wait for the task queued by the previous step to have executed.
+		// [Not queueing tasks, so nothing to do.]
 
-		// > 6. Set the readyState attribute to HAVE_METADATA.
-		// >
-		// >    Note: A loadedmetadata DOM event will be fired as part of
-		// >    setting the readyState attribute to a new value.
-		self.readyState = HAVE_METADATA;
-		self.fireSimpleEvent("loadedmetadata");
-
-		// > 7. Let jumped be false.
-		var jumped = false;
-
-		// > 8. If the media element's default playback start position is
-		// >    greater than zero, then seek to that time, and let jumped
-		// >    be true.
-		if (self.defaultPlaybackStartPosition > 0) {
-			self.currentTime = self.defaultPlaybackStartPosition;
-			jumped = true;
-		}
-
-		// > 9. Let the media element's default playback start position be
-		// >    zero.
-		self.defaultPlaybackStartPosition = 0;
-
-		// > 10. If either the media resource or the address of the current
-		// >     media resource indicate a particular start time, then set
-		// >     the initial playback position to that time and, if jumped
-		// >     is still false, seek to that time and let jumped be true.
-		// >
-		// >     For example, with media formats that support the Media
-		// >     Fragments URI fragment identifier syntax, the fragment
-		// >     identifier can be used to indicate a start position.
-		// >     [MEDIAFRAG]
-		// TODO: support Media Fragments, e.g. ?t=a,b#t=c will trim the
-		// range to [a, b) seconds, starting at c seconds into that range,
-		// ?t=,b is [0, b); ?t=a is [a, end), it uses NPT.
-
-		// > 11. If either the media resource or the address of the current
-		// >     media resource indicate a particular set of audio or video
-		// >     tracks to enable, or if the user agent has information
-		// >     that would enable it to select specific tracks to improve
-		// >     the user's experience, then the relevant audio tracks must
-		// >     be enabled in the element's audioTracks object, and, of
-		// >     the relevant video tracks, the one that is listed first in
-		// >     the element's videoTracks object must be selected. All
-		// >     other tracks must be disabled.
-		// >
-		// >     This could again be triggered by Media Fragments URI
-		// >     fragment identifier syntax, but it could also be triggered
-		// >     e.g. by the user agent selecting a 5.1 surround sound
-		// >     audio track over a stereo audio track. [MEDIAFRAG]
-		// [Not applicable.]
-
-		// > 12. If the media element has a current media controller, then:
-		// >     if jumped is true and the initial playback position,
-		// >     relative to the current media controller's timeline, is
-		// >     greater than the current media controller's media
-		// >     controller position, then seek the media controller to the
-		// >     media element's initial playback position, relative to the
-		// >     current media controller's timeline; otherwise, seek the
-		// >     media element to the media controller position, relative
-		// >     to the media element's timeline.
-		// [Not applicable.]
-
-		// >    Once the readyState attribute reaches HAVE_CURRENT_DATA, after the loadeddata event has been fired, set the element's delaying-the-load-event flag to false. This stops delaying the load event.
-		// >
-		// >    A user agent that is attempting to reduce network usage while still fetching the metadata for each media resource would also stop buffering at this point, following the rules described previously, which involve the networkState attribute switching to the NETWORK_IDLE value and a suspend event firing.
-		// >
-		// >    The user agent is required to determine the duration of the media resource and go through this step before playing.
-
-		// > Once the entire media resource has been fetched (but
-		// > potentially before any of it has been decoded)
-		// >
-		// >    Fire a simple event named progress at the media element.
-		self.fireSimpleEvent("progress");
-
-		// >    Set the networkState to NETWORK_IDLE and fire a simple event named suspend at the media element.
-		self.networkState = NETWORK_IDLE;
-		self.fireSimpleEvent("suspend");
-
-		// >    If the user agent ever discards any media data and then needs to resume the network activity to obtain it again, then it must queue a task to set the networkState to NETWORK_LOADING.
-		// [This won’t happen.]
-
-		// >    If the user agent can keep the media resource loaded, then the algorithm will continue to its final step below, which aborts the algorithm.
-
-		// The description of when this is supposed to happen is
-		// surprisingly unclear. Hopefully this will do.
-		self.readyState = HAVE_ENOUGH_DATA;
-		self.fireSimpleEvent("loadeddata");
-		self.fireSimpleEvent("canplay");
-		self.fireSimpleEvent("canplaythrough");
-
-		finishResourceFetchAlgorithm();
+		// > 8. Abort these steps. Until the load() method is invoked or the src attribute is changed, the element won't attempt to load another resource.
 	}
 
-	// > 1. Let the current media resource be the resource given by the
-	// >    absolute URL passed to this algorithm. This is now the
-	// >    element's media resource.
-	// current media resource = self.currentSrc
+	resourceFetchAlgorithm() {
+		var self = this;
+		function finishResourceFetchAlgorithm() {
+			delete self.resourceFetchXHR;
+		}
 
-	// > 2. Remove all media-resource-specific text tracks from the
-	// >    media element's list of pending text tracks, if any.
-	// [Nothing to do.]
+		function continueResourceFetchAlgorithm(data) {
+			// > Once enough of the media data has been fetched to determine
+			// > the duration of the media resource, its dimensions, and other
+			// > metadata:
+			// >
+			// > This indicates that the resource is usable. The user agent
+			// > must follow these substeps:
+			// >
+			// > 1. Establish the media timeline for the purposes of the
+			// >    current playback position, the earliest possible position,
+			// >    and the initial playback position, based on the media data.
+			// [TODO support such things?]
 
-	// > 3. Optionally, run the following substeps. This is the expected
-	// >    behavior if the user agent intends to not attempt to fetch
-	// >    the resource until the user requests it explicitly (e.g. as
-	// >    a way to implement the preload attribute's none keyword).
-	// [Substeps omitted as I don’t wish to implement no-preload.]
+			// > 2. Update the timeline offset to the date and time that
+			// >    corresponds to the zero time in the media timeline
+			// >    established in the previous step, if any. If no explicit
+			// >    time and date is given by the media resource, the timeline
+			// >    offset must be set to Not-a-Number (NaN).
+			// [Nothing to do.]
 
-	// > 4. Perform a potentially CORS-enabled fetch of the current
-	// >    media resource's absolute URL, with the mode being the
-	// >    state of the media element's crossorigin content attribute,
-	// >    the origin being the origin of the media element's
-	// >    Document, and the default origin behaviour set to taint.
-	// >
-	//
-	// [Vast swathes of text follow, mostly irrelevant as we load the
-	// entire resource at once; we don’t need to bother about the
-	// "stalled" and "suspend" events, and won’t bother for now about
-	// "progress" every 350±200ms/every byte (whichever is least
-	// frequent)]
-	//
-	// INCORRECTNESS: the window’s origin is used instead of the media
-	// element’s document’s. Security prevents doing this right.
-	// Dunno about the taint bit.
+			// > 3. Set the current playback position and the official playback
+			// >    position to the earliest possible position.
+			self.currentTime = 0;
+			self.nextDataIndex = 0;
 
-	// Past here we go laissez-faire, mostly ignoring the specs.
+			// > 4. Update the duration attribute with the time of the last
+			// >    frame of the resource, if known, on the media timeline
+			// >    established above. If it is not known (e.g. a stream that
+			// >    is in principle infinite), update the duration attribute to
+			// >    the value positive Infinity.
+			// >
+			// >    Note: The user agent will queue a task to fire a simple
+			// >    event named durationchange at the element at this point.
+			self.data = data.data;
+			self.duration = data.data.length === 0 ? 0 : data.data[data.data.length - 1][1];
+			self.fireSimpleEvent("durationchange");
 
-	var xhr = new XMLHttpRequest();
-	if (self.ttyPlayer["crossOrigin"] === "use-credentials") {
-		xhr.withCredentials = true;
-	} else if (self.ttyPlayer["crossOrigin"] === "anonymous" && "mozAnon" in xhr) {
-		// INCORRECTNESS: no anonymous support outside Firefox.
-		// (No one has implemented AnonXMLHttpRequest ☹.)
-		xhr.mozAnon = true;
-	}
-	xhr.onabort = finishResourceFetchAlgorithm;
-	xhr.open("GET", self.currentSrc);
-	xhr.responseType = "arraybuffer";
-	xhr.onload = xhr.onerror = function() {
-		if (xhr.status === 200) {
-			var data;
-			try {
-				data = parseTTYRec(xhr.response);
-				// TODO: add a bit of validation/sanity checking?
-			} catch (e) {
-				// window.console && console.warn && console.warn("parseTTYRec failed: ", e);
-				// > If the media data can be fetched but is found by
-				// > inspection to be in an unsupported format, or can
-				// > otherwise not be rendered at all
+			// > 5. For video elements, set the videoWidth and videoHeight
+			// >    attributes, and queue a task to fire a simple event named
+			// >    resize at the media element.
+			// >
+			// >    Note: Further resize events will be fired if the dimensions
+			// >    subsequently change.
+			// TODO: allow this to be written on the HTML
+			// TODO: modify the file format to track window sizes, then do
+			// something like this (ttyWidth and ttyHeight, in chars, I
+			// think).
+			// These are taken straight from term.js; TODO: modify it to send resize events.
+			if (data.dimensions) {
+				self.ttyPlayer["resize"](data.dimensions.cols, data.dimensions.rows);
+			}
+
+			// XXX: the spec mentions getStartDate(), which data.startDate
+			// covers, but Firefox and Chrome at least (dunno about others)
+			// don’t implement that, so I’m not doing anything with it yet.
+
+			// We could render the first frame if we wanted to. Should we?
+			//self.render();
+
+			// > 6. Set the readyState attribute to HAVE_METADATA.
+			// >
+			// >    Note: A loadedmetadata DOM event will be fired as part of
+			// >    setting the readyState attribute to a new value.
+			self.readyState = HAVE_METADATA;
+			self.fireSimpleEvent("loadedmetadata");
+
+			// > 7. Let jumped be false.
+			var jumped = false;
+
+			// > 8. If the media element's default playback start position is
+			// >    greater than zero, then seek to that time, and let jumped
+			// >    be true.
+			if (self.defaultPlaybackStartPosition > 0) {
+				self.currentTime = self.defaultPlaybackStartPosition;
+				jumped = true;
+			}
+
+			// > 9. Let the media element's default playback start position be
+			// >    zero.
+			self.defaultPlaybackStartPosition = 0;
+
+			// > 10. If either the media resource or the address of the current
+			// >     media resource indicate a particular start time, then set
+			// >     the initial playback position to that time and, if jumped
+			// >     is still false, seek to that time and let jumped be true.
+			// >
+			// >     For example, with media formats that support the Media
+			// >     Fragments URI fragment identifier syntax, the fragment
+			// >     identifier can be used to indicate a start position.
+			// >     [MEDIAFRAG]
+			// TODO: support Media Fragments, e.g. ?t=a,b#t=c will trim the
+			// range to [a, b) seconds, starting at c seconds into that range,
+			// ?t=,b is [0, b); ?t=a is [a, end), it uses NPT.
+
+			// > 11. If either the media resource or the address of the current
+			// >     media resource indicate a particular set of audio or video
+			// >     tracks to enable, or if the user agent has information
+			// >     that would enable it to select specific tracks to improve
+			// >     the user's experience, then the relevant audio tracks must
+			// >     be enabled in the element's audioTracks object, and, of
+			// >     the relevant video tracks, the one that is listed first in
+			// >     the element's videoTracks object must be selected. All
+			// >     other tracks must be disabled.
+			// >
+			// >     This could again be triggered by Media Fragments URI
+			// >     fragment identifier syntax, but it could also be triggered
+			// >     e.g. by the user agent selecting a 5.1 surround sound
+			// >     audio track over a stereo audio track. [MEDIAFRAG]
+			// [Not applicable.]
+
+			// > 12. If the media element has a current media controller, then:
+			// >     if jumped is true and the initial playback position,
+			// >     relative to the current media controller's timeline, is
+			// >     greater than the current media controller's media
+			// >     controller position, then seek the media controller to the
+			// >     media element's initial playback position, relative to the
+			// >     current media controller's timeline; otherwise, seek the
+			// >     media element to the media controller position, relative
+			// >     to the media element's timeline.
+			// [Not applicable.]
+
+			// >    Once the readyState attribute reaches HAVE_CURRENT_DATA, after the loadeddata event has been fired, set the element's delaying-the-load-event flag to false. This stops delaying the load event.
+			// >
+			// >    A user agent that is attempting to reduce network usage while still fetching the metadata for each media resource would also stop buffering at this point, following the rules described previously, which involve the networkState attribute switching to the NETWORK_IDLE value and a suspend event firing.
+			// >
+			// >    The user agent is required to determine the duration of the media resource and go through this step before playing.
+
+			// > Once the entire media resource has been fetched (but
+			// > potentially before any of it has been decoded)
+			// >
+			// >    Fire a simple event named progress at the media element.
+			self.fireSimpleEvent("progress");
+
+			// >    Set the networkState to NETWORK_IDLE and fire a simple event named suspend at the media element.
+			self.networkState = NETWORK_IDLE;
+			self.fireSimpleEvent("suspend");
+
+			// >    If the user agent ever discards any media data and then needs to resume the network activity to obtain it again, then it must queue a task to set the networkState to NETWORK_LOADING.
+			// [This won’t happen.]
+
+			// >    If the user agent can keep the media resource loaded, then the algorithm will continue to its final step below, which aborts the algorithm.
+
+			// The description of when this is supposed to happen is
+			// surprisingly unclear. Hopefully this will do.
+			self.readyState = HAVE_ENOUGH_DATA;
+			self.fireSimpleEvent("loadeddata");
+			self.fireSimpleEvent("canplay");
+			self.fireSimpleEvent("canplaythrough");
+
+			finishResourceFetchAlgorithm();
+		}
+
+		// > 1. Let the current media resource be the resource given by the
+		// >    absolute URL passed to this algorithm. This is now the
+		// >    element's media resource.
+		// current media resource = self.currentSrc
+
+		// > 2. Remove all media-resource-specific text tracks from the
+		// >    media element's list of pending text tracks, if any.
+		// [Nothing to do.]
+
+		// > 3. Optionally, run the following substeps. This is the expected
+		// >    behavior if the user agent intends to not attempt to fetch
+		// >    the resource until the user requests it explicitly (e.g. as
+		// >    a way to implement the preload attribute's none keyword).
+		// [Substeps omitted as I don’t wish to implement no-preload.]
+
+		// > 4. Perform a potentially CORS-enabled fetch of the current
+		// >    media resource's absolute URL, with the mode being the
+		// >    state of the media element's crossorigin content attribute,
+		// >    the origin being the origin of the media element's
+		// >    Document, and the default origin behaviour set to taint.
+		// >
+		//
+		// [Vast swathes of text follow, mostly irrelevant as we load the
+		// entire resource at once; we don’t need to bother about the
+		// "stalled" and "suspend" events, and won’t bother for now about
+		// "progress" every 350±200ms/every byte (whichever is least
+		// frequent)]
+		//
+		// INCORRECTNESS: the window’s origin is used instead of the media
+		// element’s document’s. Security prevents doing this right.
+		// Dunno about the taint bit.
+
+		// Past here we go laissez-faire, mostly ignoring the specs.
+
+		var xhr = new XMLHttpRequest();
+		if (self.ttyPlayer["crossOrigin"] === "use-credentials") {
+			xhr.withCredentials = true;
+		} else if (self.ttyPlayer["crossOrigin"] === "anonymous" && "mozAnon" in xhr) {
+			// INCORRECTNESS: no anonymous support outside Firefox.
+			// (No one has implemented AnonXMLHttpRequest ☹.)
+			xhr.mozAnon = true;
+		}
+		xhr.onabort = finishResourceFetchAlgorithm;
+		xhr.open("GET", self.currentSrc);
+		xhr.responseType = "arraybuffer";
+		xhr.onload = xhr.onerror = function() {
+			if (xhr.status === 200) {
+				var data;
+				try {
+					data = parseTTYRec(xhr.response);
+					// TODO: add a bit of validation/sanity checking?
+				} catch (e) {
+					// window.console && console.warn && console.warn("parseTTYRec failed: ", e);
+					// > If the media data can be fetched but is found by
+					// > inspection to be in an unsupported format, or can
+					// > otherwise not be rendered at all
+					// > [Give up and go back to resource selection, which
+					// > we don’t need to return to due to our design.]
+					finishResourceFetchAlgorithm();
+					self.resourceSelectionAlgorithmFailedWithAttribute();
+					return;
+				}
+
+				// TODO: implement something like this:
+				//
+				// > If the media resource is found to have a video track
+				// >
+				// > 1. Create a VideoTrack object to represent the
+				// >    video track.
+				// >
+				// > 2. Update the media element's videoTracks
+				// >    attribute's VideoTrackList object with the new
+				// >    VideoTrack object.
+				// >
+				// > 3. Fire a trusted event with the name addtrack,
+				// >    that does not bubble and is not cancelable, and
+				// >    that uses the TrackEvent interface, with the
+				// >    track attribute initialized to the new
+				// >    VideoTrack object, at this VideoTrackList
+				// >    object.
+				continueResourceFetchAlgorithm(data);
+			} else {
+				// > If the media data cannot be fetched at all, due to
+				// > network errors, causing the user agent to give up
+				// > trying to fetch the resource
 				// > [Give up and go back to resource selection, which
 				// > we don’t need to return to due to our design.]
 				finishResourceFetchAlgorithm();
 				self.resourceSelectionAlgorithmFailedWithAttribute();
 				return;
 			}
-
-			// TODO: implement something like this:
-			//
-			// > If the media resource is found to have a video track
-			// >
-			// > 1. Create a VideoTrack object to represent the
-			// >    video track.
-			// >
-			// > 2. Update the media element's videoTracks
-			// >    attribute's VideoTrackList object with the new
-			// >    VideoTrack object.
-			// >
-			// > 3. Fire a trusted event with the name addtrack,
-			// >    that does not bubble and is not cancelable, and
-			// >    that uses the TrackEvent interface, with the
-			// >    track attribute initialized to the new
-			// >    VideoTrack object, at this VideoTrackList
-			// >    object.
-			continueResourceFetchAlgorithm(data);
-		} else {
-			// > If the media data cannot be fetched at all, due to
-			// > network errors, causing the user agent to give up
-			// > trying to fetch the resource
-			// > [Give up and go back to resource selection, which
-			// > we don’t need to return to due to our design.]
-			finishResourceFetchAlgorithm();
-			self.resourceSelectionAlgorithmFailedWithAttribute();
-			return;
+		};
+		self.resourceFetchXHR = xhr;
+		try {
+			xhr.send();
+		} catch (e) {
+			// e.g. relative URL on file: in some browsers.
+			xhr.onerror();
 		}
-	};
-	self.resourceFetchXHR = xhr;
-	try {
-		xhr.send();
-	} catch (e) {
-		// e.g. relative URL on file: in some browsers.
-		xhr.onerror();
 	}
-};
+}
 
 class TTYPlayerElement extends HTMLElement {
 
 	// FIXME: we used to set up the internal state at construction time, but with custom elements v1 we can no longer do this: it is an error to access or add attributes in the constructor, and browsers do actually barf if you try it. Until we go all in on Shadow DOM, then, we initialise everything in connectedCallback. This means that various state is uninitialised until that time, and the element won’t work properly in various severe ways.
+	constructor() {
+		super();
+		this["_"] = new TTYPlayerInternalState(this);
+	}
 
 	static get "observedAttributes"() {
 		return ["src", "controls", "poster"];
 	}
 
 	"attributeChangedCallback"(name, oldValue, value) {
-		if (!this["_"]) {
+		if (!this["_"].isSetUp) {
 			return;
 		}
 		if (name === "src" && value !== null) {
@@ -1200,14 +1453,14 @@ class TTYPlayerElement extends HTMLElement {
 			// Due to the poster=npt:… possibility and how we could otherwise palm
 			// it off to the browser, we *do* actually regard the show poster flag
 			// in deciding whether to “run these steps”.
-			this["_"].showPoster = this["_"].showPoster;
+			this["_"].setShowPoster(this["_"].showPoster);
 		}
 	}
 
 	"connectedCallback"() {
-		if (!this["_"]) {
-			this["_"] = new TTYPlayerInternalState(this);
-			this["_"].setUp();
+		var _ = this["_"];
+		if (!_.isSetUp) {
+			_.setUp();
 
 			// TODO: put no-preload in load(), as defined, rather than here.
 			// As it stands, changing src will preload even though it need not.
@@ -1220,7 +1473,21 @@ class TTYPlayerElement extends HTMLElement {
 			}
 		}
 
-		this["_"].controlsShownOrHidden();
+		if (_.menu) {
+			// TODO: when https://bugzilla.mozilla.org/show_bug.cgi?id=1606533 is fixed, assess further whether we can place it inside the element, or really anywhere else.
+			// As an alternative, consider putting it inside the shadow root and adding contextmenu to all the things inside it, instead. May depend on the fix for that bug.
+			// (<head> perhaps shouldn’t contain <menu>, but I like my chances of not messing things up better when I put it in the head.)
+			document.head.appendChild(_.menu);
+		}
+
+		_.controlsShownOrHidden();
+	}
+
+	"disconnectedCallback"() {
+		var menu = this["_"].menu;
+		if (menu) {
+			menu.remove();
+		}
 	}
 }
 
@@ -1560,7 +1827,7 @@ TTYPlayerElementPrototype["play"] = function() {
 		if (self["ended"]) {
 			self["currentTime"] = self["playbackRate"] < 0 ? self["duration"] : 0;
 		}
-		self["_"].showPoster = false;
+		self["_"].setShowPoster(false);
 		self["_"].paused = false;
 		var lastTime = new Date();
 		self["_"].ticker = setInterval(function() {
