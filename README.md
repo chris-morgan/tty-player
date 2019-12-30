@@ -1,6 +1,8 @@
 `<tty-player>`: `<video>`, but for ttyrec scripts
 =================================================
 
+**Current status (2020-01-02):** in the middle of a big update from 2015 to 2020 practices. I’ve switched it to using Custom Elements v1 and Shadow DOM v1, dropped IE/Edge support outright, started using CSS Shadow Parts (which Safari doesn’t yet support) for most visual customisation. I did this so that I could use it in a blog post on my website. Planned but ultimately unscheduled work (since I have satisfied my own immediate needs): finish tidying up, redo the build system altogether, minify CSS in the minified JS, migrate from term.js to xterm.js, publish on npm, update all the documentation, update tty-player.chrismorgan.info.
+
 - [Examples](#user-content-examples)
 - [Using tty-player](#user-content-using-tty-player)
 - [Browser compatibility](#user-content-browser-compatibility)
