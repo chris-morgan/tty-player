@@ -238,7 +238,7 @@ function makeMenu(ttyPlayer) {
 	if (menu.type !== "context") {
 		return null;
 	}
-	menu.id = "treplay-contextmenu-" + menuIdSequence++;
+	menu.id = "tty-player-contextmenu-" + menuIdSequence++;
 
 	var playPause = document.createElement("menuitem");
 	playPause.onclick = function() {
