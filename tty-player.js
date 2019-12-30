@@ -212,7 +212,7 @@ const FANCY_TECHNICAL_ERROR_EXPLANATIONS = true;
 
 var menuIdSequence = 0;
 
-function makeMenu(ttyPlayer) {
+function makeMenu(ttyPlayer, _) {
 	// Make a context menu with these items:
 	// - Play/Pause
 	// - Show/Hide Controls
@@ -241,13 +241,7 @@ function makeMenu(ttyPlayer) {
 	menu.id = "tty-player-contextmenu-" + menuIdSequence++;
 
 	var playPause = document.createElement("menuitem");
-	playPause.onclick = function() {
-		if (ttyPlayer["paused"]) {
-			ttyPlayer["play"]();
-		} else {
-			ttyPlayer["pause"]();
-		}
-	};
+	playPause.onclick = _.playOrPause.bind(_);
 	function setPlayPauseDetails(label, path) {
 		playPause.label = label;
 		playPause.icon = "data:image/svg+xml,%3C?xml version='1.0' encoding='UTF-8' standalone='no'?%3E%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Cpath stroke='%23999' stroke-width='1' fill='%23eee' d='" + path + "'/%3E%3C/svg%3E";
@@ -685,13 +679,7 @@ class TTYPlayerInternalState {
 		var play = document.createElement("button");
 		addPart(play, "play-pause-button");
 		addPart(play, "play-button");
-		play.onclick = function() {
-			if (ttyPlayer["paused"]) {
-				ttyPlayer["play"]();
-			} else {
-				ttyPlayer["pause"]();
-			}
-		};
+		play.onclick = self.playOrPause.bind(self);
 		ttyPlayer.addEventListener("play", function() {
 			addPart(play, "pause-button");
 			removePart(play, "play-button");
@@ -750,7 +738,7 @@ class TTYPlayerInternalState {
 		shadowRoot.appendChild(posterOverlay);
 		shadowRoot.appendChild(controlsElement);
 
-		self.menu = makeMenu(ttyPlayer);
+		self.menu = makeMenu(ttyPlayer, self);
 	}
 
 	setUp() {
@@ -876,9 +864,57 @@ class TTYPlayerInternalState {
 	}
 
 	controlsShownOrHidden() {
-		this.updateCurrentTimeElement();
-		if (this.menu) {
-			this.menu.onControlsShownOrHidden();
+		var self = this;
+		var terminalElement = self.terminal.element;
+		var menu = self.menu;
+		var touchstartHandler = self.touchstartHandler;
+		self.updateCurrentTimeElement();
+		if (menu) {
+			menu.onControlsShownOrHidden();
+		}
+		if (self.ttyPlayer.controls) {
+			// It’s subjective, but I’d like *clicking* on the terminal (probably desktop) to do nothing, but *tapping* (probably mobile) to trigger play/pause, iff [controls].
+			var startTouch;
+			terminalElement.addEventListener('touchstart', touchstartHandler || (self.touchstartHandler = event => {
+				// Simplifying assumption: only one finger is in use.
+				if (startTouch) {
+					return;
+				}
+				startTouch = event.touches.item(0);
+				// If the touch lasts more than 300ms, it’s more a long press than a tap.
+				const cancelTimeout = setTimeout(cancel, 300);
+
+				function move(event) {
+					// If the finger moves more than five pixels from where it started, it’s more a swipe than a tap.
+					var touch = event.touches.item(0);
+					if (Math.pow(touch.clientX - startTouch.clientX, 2) + Math.pow(touch.clientY - startTouch.clientY, 2) > 25) {
+						cancel();
+					}
+				}
+
+				function end(event) {
+					// TODO: in this case particularly it’d be nice to flash a play/pause icon on screen briefly, like YouTube does, as an affordance/confirmation that it happened.
+					// This isn’t quite so urgent because the touch probably causes the controls to be shown.
+					self.playOrPause();
+					cancel();
+					// Don’t follow through with a click event (it’s unlikely to be harmful, but isn’t necessary.)
+					event.preventDefault();
+				}
+
+				function cancel() {
+					startTouch = null;
+					clearTimeout(cancelTimeout);
+					terminalElement.removeEventListener('touchmove', move);
+					terminalElement.removeEventListener('touchend', end);
+					terminalElement.removeEventListener('touchcancel', cancel);
+				}
+
+				terminalElement.addEventListener('touchmove', move);
+				terminalElement.addEventListener('touchend', end);
+				terminalElement.addEventListener('touchcancel', cancel);
+			}));
+		} else if (touchstartHandler) {
+			terminalElement.removeEventListener('touchstart', touchstartHandler);
 		}
 	}
 
@@ -889,6 +925,14 @@ class TTYPlayerInternalState {
 			left += this.currentTime / this.duration * this.progressElement.offsetWidth;
 		}
 		this.currentTimeElement.style.left = left + "px";
+	}
+
+	playOrPause() {
+		if (this.paused) {
+			this.ttyPlayer["play"]();
+		} else {
+			this.ttyPlayer["pause"]();
+		}
 	}
 
 	render() {
