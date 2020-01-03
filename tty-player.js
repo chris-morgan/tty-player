@@ -470,6 +470,7 @@ class TTYPlayerInternalState {
 
 			/* Browsers tend to show the controls when a <video> ends, too; I, however, am not doing this for now at least as the controls will overlap with what is often the most important part of the terminal (the bottom). For this reason, I haven’t hooked up any support for that either, only showing controls persistently when the poster is up. */
 			[part~=controls].poster-visible,
+			[part~=controls]:focus-within,
 			:host(:hover) [part~=controls] {
 				opacity: 1;
 			}
