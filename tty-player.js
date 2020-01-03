@@ -408,11 +408,14 @@ class TTYPlayerInternalState {
 		var styleElement = document.createElement('style');
 		styleElement.textContent = `
 			:host {
-				--terminal-font-family: monospace;
 				--terminal-fg: #f0f0f0;
 				--terminal-bg: #000000;
 				display: inline-block;
 				position: relative;
+				font: monospace;
+				line-height: initial;
+				color: var(--terminal-fg);
+				background: var(--terminal-bg);
 			}
 
 			[part~=title] {
@@ -462,6 +465,7 @@ class TTYPlayerInternalState {
 				flex-direction: row;
 				transition: opacity 0.2s linear;
 				cursor: default;
+				font-family: system-ui, sans-serif;
 			}
 
 			/* Browsers tend to show the controls when a <video> ends, too; I, however, am not doing this for now at least as the controls will overlap with what is often the most important part of the terminal (the bottom). For this reason, I haven’t hooked up any support for that either, only showing controls persistently when the poster is up. */
@@ -581,7 +585,6 @@ class TTYPlayerInternalState {
 				position: absolute;
 				color: #ddd;
 				background: #888;
-				font-family: sans-serif;
 				font-size: 12px;
 				display: block;
 				box-shadow: 0 1px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px rgba(255, 255, 255, 0.2);
@@ -605,7 +608,6 @@ class TTYPlayerInternalState {
 			}
 
 			[part~=duration] {
-				font-family: sans-serif;
 				font-size: 12px;
 				color: #999;
 				line-height: 18px;
@@ -615,12 +617,7 @@ class TTYPlayerInternalState {
 			.terminal {
 				overflow: auto;
 				white-space: pre;
-				font-family: var(--terminal-font-family);
-				font-size: var(--terminal-font-size);
-				line-height: initial;
 				cursor: text;
-				color: var(--terminal-fg);
-				background: var(--terminal-bg);
 			}
 
 			.terminal-cursor {
