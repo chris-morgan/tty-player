@@ -412,7 +412,7 @@ class TTYPlayerInternalState {
 				--terminal-bg: #000000;
 				display: inline-block;
 				position: relative;
-				font: monospace;
+				font-family: monospace;
 				line-height: initial;
 				color: var(--terminal-fg);
 				background: var(--terminal-bg);
