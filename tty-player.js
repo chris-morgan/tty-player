@@ -742,10 +742,13 @@ class TTYPlayerInternalState {
 	setUp() {
 		var self = this;
 		var ttyPlayer = self.ttyPlayer;
+		var menu = self.menu;
 		self.isSetUp = true;
 		// Any things that required reading children or attributes of ttyPlayer must sit in here rather than the constructor.
 
-		ttyPlayer.setAttribute("contextmenu", self.menu.id);
+		if (menu) {
+			ttyPlayer.setAttribute("contextmenu", menu.id);
+		}
 		var rows = +ttyPlayer.getAttribute("rows");
 		var cols = +ttyPlayer.getAttribute("cols");
 		ttyPlayer["resize"](cols > 0 ? cols : ttyPlayer["cols"],
